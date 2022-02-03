@@ -1,0 +1,6 @@
+# Ignore build and debug directories.
+build/
+debug/
+
+# Ignore workspace configurations.
+.vscode/

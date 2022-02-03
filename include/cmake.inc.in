@@ -1,0 +1,21 @@
+/* --- CMAKE PROJECT INCLUDE ------------------------------------------------ */
+
+#define         CMAKE_PROJECT_NAME          "@CMAKE_PROJECT_NAME@"
+#cmakedefine    CMAKE_PROJECT_VERSION       "@CMAKE_PROJECT_VERSION@"
+#ifndef         CMAKE_PROJECT_VERSION
+#define         CMAKE_PROJECT_VERSION       "0.0.0"
+#endif
+#cmakedefine    CMAKE_PROJECT_VERSION_MAJOR @CMAKE_PROJECT_VERSION_MAJOR@
+#ifndef         CMAKE_PROJECT_VERSION_MAJOR
+#define         CMAKE_PROJECT_VERSION_MAJOR 0
+#endif
+#cmakedefine    CMAKE_PROJECT_VERSION_MINOR @CMAKE_PROJECT_VERSION_MINOR@
+#ifndef         CMAKE_PROJECT_VERSION_MINOR
+#define         CMAKE_PROJECT_VERSION_MINOR 0
+#endif
+#cmakedefine    CMAKE_PROJECT_VERSION_PATCH @CMAKE_PROJECT_VERSION_PATCH@
+#ifndef         CMAKE_PROJECT_VERSION_PATCH
+#define         CMAKE_PROJECT_VERSION_PATCH 0
+#endif
+
+/* -------------------------------------------------------------------------- */

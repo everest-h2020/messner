@@ -1,0 +1,16 @@
+/* --- GIT REVISION INCLUDE ------------------------------------------------- */
+
+#cmakedefine    GIT_HEAD                "@GIT_HEAD@"
+#ifndef         GIT_HEAD
+#define         GIT_HEAD                "no-git"
+#endif
+#cmakedefine    GIT_DESCRIBE            "@GIT_DESCRIBE@"
+#ifndef         GIT_DESCRIBE
+#define         GIT_DESCRIBE            "no-git"
+#endif
+#cmakedefine01  GIT_DIRTY
+#ifndef         GIT_DIRTY
+#define         GIT_DIRTY               1
+#endif
+
+/* -------------------------------------------------------------------------- */
