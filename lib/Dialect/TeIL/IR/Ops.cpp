@@ -14,6 +14,7 @@ using namespace mlir::teil;
 
 //===- Generated implementation -------------------------------------------===//
 
+#define GET_OP_CLASSES
 #include "mlir/Dialect/TeIL/IR/Ops.cpp.inc"
 
 //===----------------------------------------------------------------------===//

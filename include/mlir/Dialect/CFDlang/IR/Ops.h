@@ -9,8 +9,11 @@
 
 #include "mlir/Dialect/CFDlang/IR/Interfaces.h"
 #include "mlir/Dialect/CFDlang/IR/Types.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/RegionKindInterface.h"
+#include "mlir/IR/SymbolTable.h"
 
 //===- Generated includes -------------------------------------------------===//
 

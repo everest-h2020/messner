@@ -14,6 +14,7 @@ using namespace mlir::cfdlang;
 
 //===- Generated implementation -------------------------------------------===//
 
+#define GET_OP_CLASSES
 #include "mlir/Dialect/CFDlang/IR/Ops.cpp.inc"
 
 //===----------------------------------------------------------------------===//
