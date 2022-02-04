@@ -27,7 +27,8 @@ Operation* TeILDialect::materializeConstant(
     Location loc
 )
 {
-    return builder.create<ConstantOp>(loc, type, value);
+    // TODO: Implement.
+    return nullptr;
 }
 
 void TeILDialect::initialize()
