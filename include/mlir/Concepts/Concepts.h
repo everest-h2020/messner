@@ -17,9 +17,13 @@
 
 namespace mlir::concepts {
 
-template<class Base, class T>
+// TODO: The actual concepts proposal must use a metaprogramming library to
+//       provide both the union_iterator and the UnionConcept types!
+
+/** Integral constant indicating whether @p T is derived from @p From . */
+template<class From, class T>
 inline constexpr bool is_derived_v =
-    std::is_same_v<Base, T> || std::is_base_of_v<Base, T>;
+    std::is_base_of_v<From, T> || std::is_same_v<From, T>;
 
 template<class T>
 inline constexpr bool is_attribute_v = is_derived_v<Attribute, T>;
