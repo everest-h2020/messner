@@ -16,7 +16,7 @@ namespace mlir::teil {
 /** Natural number type concept. */
 struct NatType : ConstrainedType<IndexType> {
     /** Obtains the NatType instance. */
-    static inline NatType get(MLIRContext* context)
+    static inline NatType get(MLIRContext *context)
     {
         return IndexType::get(context).cast<NatType>();
     }
@@ -35,7 +35,7 @@ struct NatAttr : ConstrainedAttribute<IntegerAttr, NatType> {
     using ValueType = natural_t;
 
     /** Obtains a NatAttr for @p value . */
-    static inline NatAttr get(MLIRContext* context, natural_t value)
+    static inline NatAttr get(MLIRContext *context, natural_t value)
     {
         return IntegerAttr::get(NatType::get(context), APInt(64, value, false))
             .cast<NatAttr>();
@@ -54,7 +54,7 @@ struct NatAttr : ConstrainedAttribute<IntegerAttr, NatType> {
 struct NatArrayAttr : ConstrainedArrayAttribute<NatAttr> {
     /** Obtains a NatArrayAttr for @p values . */
     static inline NatArrayAttr get(
-        MLIRContext* context,
+        MLIRContext *context,
         ArrayRef<natural_t> values
     )
     {

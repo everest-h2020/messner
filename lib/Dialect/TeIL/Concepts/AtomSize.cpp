@@ -56,7 +56,7 @@ LogicalResult AtomSize::fold(ArrayRef<DimSizeAttr> args)
     return success(result);
 }
 
-LogicalResult AtomSize::reify(OpBuilder& builder, Location loc)
+LogicalResult AtomSize::reify(OpBuilder &builder, Location loc)
 {
     auto dialect = builder.getContext()->getLoadedDialect<TeILDialect>();
     auto result = true;

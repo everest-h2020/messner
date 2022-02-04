@@ -29,7 +29,7 @@ using ShapeStorage = SmallVector<dim_size_t>;
 
 /** Determines whether @p shape has dimensions of size 0. */
 template<class ShapeRange>
-inline auto isTriviallyEmpty(ShapeRange&& shape)
+inline auto isTriviallyEmpty(ShapeRange &&shape)
 {
     return llvm::any_of(
         std::forward<ShapeRange>(shape),
@@ -39,7 +39,7 @@ inline auto isTriviallyEmpty(ShapeRange&& shape)
 
 /** Count the number of dynamically sized dimensions in @p shape . */
 template<class ShapeRange>
-inline std::size_t countDynamicDims(ShapeRange&& shape)
+inline std::size_t countDynamicDims(ShapeRange &&shape)
 {
     return static_cast<std::size_t>(
         llvm::count(std::forward<ShapeRange>(shape), dynamic_size)
@@ -59,7 +59,7 @@ inline std::size_t countDynamicDims(ShapeRange&& shape)
  * @retval  size_t      The static extent of @p shape .
  */
 template<class ShapeRange>
-inline Optional<std::size_t> calculateSmallExtent(ShapeRange&& shape)
+inline Optional<std::size_t> calculateSmallExtent(ShapeRange &&shape)
 {
     std::size_t result{0};
     for (auto it = shape.begin(); it != shape.end(); ++it) {
@@ -109,7 +109,7 @@ struct DimSizeType : ConstrainedType<IntegerType, DimSizeType> {
     }
 
     /** Obtains the DimSizeType instance. */
-    static inline DimSizeType get(MLIRContext* context)
+    static inline DimSizeType get(MLIRContext *context)
     {
         return IntegerType::get(context, 64U).cast<DimSizeType>();
     }
@@ -128,7 +128,7 @@ struct DimSizeAttr : ConstrainedAttribute<IntegerAttr, DimSizeType> {
     using ValueType = dim_size_t;
 
     /** Obtains a DimSizeAttr for @p value . */
-    static inline DimSizeAttr get(MLIRContext* context, ValueType value)
+    static inline DimSizeAttr get(MLIRContext *context, ValueType value)
     {
         return IntegerAttr::get(
             DimSizeType::get(context),
@@ -149,7 +149,7 @@ struct DimSizeAttr : ConstrainedAttribute<IntegerAttr, DimSizeType> {
 struct DimSizeArrayAttr : ConstrainedArrayAttribute<DimSizeAttr> {
     /** Obtains a DimSizeArrayAttr for @p values . */
     static inline DimSizeArrayAttr get(
-        MLIRContext* context,
+        MLIRContext *context,
         ArrayRef<dim_size_t> values
     )
     {
@@ -179,7 +179,7 @@ struct ShapeType : ConstrainedType<RankedTensorType, ShapeType> {
     }
 
     /** Obtains the ShapeType for @p rank . */
-    static inline ShapeType get(MLIRContext* context, rank_t rank)
+    static inline ShapeType get(MLIRContext *context, rank_t rank)
     {
         auto shape = static_cast<int64_t>(rank);
         return RankedTensorType::get(
@@ -203,7 +203,7 @@ struct Shape : ConstrainedValue<ShapeType> {
 struct DenseShapeAttr : ConstrainedAttribute<DenseIntElementsAttr, ShapeType> {
 private:
     struct extract_f {
-        inline dim_size_t operator()(const APInt& value) const
+        inline dim_size_t operator()(const APInt &value) const
         {
             return value.getSExtValue();
         }
@@ -219,7 +219,7 @@ public:
     using ValueType = ShapeStorage;
 
     /** Obtains a DenseShapeAttr for @p values . */
-    static inline DenseShapeAttr get(MLIRContext* context, shape_t values)
+    static inline DenseShapeAttr get(MLIRContext *context, shape_t values)
     {
         return DenseIntElementsAttr::get(
             ShapeType::get(context, values.size()),
@@ -242,7 +242,7 @@ public:
     }
 
     /** Copies the constrained attribute value to @p result . */
-    inline void getValue(ShapeBuilder& result) const
+    inline void getValue(ShapeBuilder &result) const
     {
         result.clear();
         result.reserve(size());

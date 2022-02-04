@@ -48,7 +48,7 @@ struct AtomSize {
         {}
 
         iterator& operator=(const iterator&) = default;
-        bool operator==(const iterator& rhs) const
+        bool operator==(const iterator &rhs) const
         {
             return m_shape == rhs.m_shape;
         }
@@ -76,7 +76,7 @@ struct AtomSize {
      * @pre     `countDynamicDims(shape) == 0`
      */
     template<class ShapeRange>
-    static AtomSize getStatic(ShapeRange&& shape)
+    static AtomSize getStatic(ShapeRange &&shape)
     {
         assert(countDynamicDims(shape) == 0);
 
@@ -111,7 +111,7 @@ struct AtomSize {
      * @pre     `llvm::all_of(args, [](Value x){ return x.isa<DimSize>(); })`
      */
     template<class ShapeRange>
-    static AtomSize getMixed(ShapeRange&& shape, ValueRange args)
+    static AtomSize getMixed(ShapeRange &&shape, ValueRange args)
     {
         AtomSize result;
         auto arg = args.begin();
@@ -208,7 +208,7 @@ struct AtomSize {
      * @retval      success()   There are no undefined values.
      * @retval      failure()   The AtomSize is not concrete.
      */
-    LogicalResult reify(OpBuilder& builder, Location loc);
+    LogicalResult reify(OpBuilder &builder, Location loc);
 
     /** @copydoc empty() */
     inline bool isScalar() const { return empty(); }
@@ -247,7 +247,7 @@ struct AtomSize {
     }
 
     /** Determines whether this AtomSize is trivially equal to @p rhs . */
-    inline bool operator==(const AtomSize& rhs) const
+    inline bool operator==(const AtomSize &rhs) const
     {
         if (*this != rhs.getShape()) {
             // Shapes must match.
@@ -264,7 +264,7 @@ struct AtomSize {
         ) == std::make_pair(lhs_args.end(), rhs_args.end());
     }
     /** Determines whether this AtomSize is not trivially equal to @p rhs . */
-    inline bool operator!=(const AtomSize& rhs) const
+    inline bool operator!=(const AtomSize &rhs) const
     {
         return !(*this == rhs);
     }

@@ -303,7 +303,7 @@ struct ConstrainedArrayAttribute : ConstrainedAttribute<
     }
 
     /** Copies the constrained attribute values to @p result . */
-    inline void getValues(SmallVectorImpl<ElementType>& result) const
+    inline void getValues(SmallVectorImpl<ElementType> &result) const
     {
         result.clear();
         result.reserve(ArrayAttr::size());

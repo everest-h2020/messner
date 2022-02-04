@@ -35,14 +35,14 @@ void TeILDialect::registerTypes()
     >();
 }
 
-void TeILDialect::printType(Type type, DialectAsmPrinter& printer) const
+void TeILDialect::printType(Type type, DialectAsmPrinter &printer) const
 {
     if (failed(generatedTypePrinter(type, printer))) {
         llvm_unreachable("unexpected 'teil' type kind");
     }
 }
 
-Type TeILDialect::parseType(DialectAsmParser& parser) const
+Type TeILDialect::parseType(DialectAsmParser &parser) const
 {
     StringRef typeTag;
     if (parser.parseKeyword(&typeTag)) {

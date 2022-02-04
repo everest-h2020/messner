@@ -23,7 +23,7 @@ inline constexpr auto small_vector_capacity =
 
 /** Alternative to llvm::to_vector that uses the default capacity. */
 template<class Range>
-inline auto to_vector(Range&& range)
+inline auto to_vector(Range &&range)
 {
     using reference = decltype(*range.begin());
     using value_type = std::remove_cv_t<std::remove_reference_t<reference>>;

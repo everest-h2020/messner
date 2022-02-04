@@ -21,7 +21,7 @@ using namespace mlir::teil;
 //===----------------------------------------------------------------------===//
 
 Operation* TeILDialect::materializeConstant(
-    OpBuilder& builder,
+    OpBuilder &builder,
     Attribute value,
     Type type,
     Location loc
