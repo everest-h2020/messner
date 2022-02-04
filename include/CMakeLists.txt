@@ -12,3 +12,6 @@ configure_file(
     ${CMAKE_BINARY_DIR}/include/git.inc
     @ONLY
 )
+
+# MLIR generated headers.
+add_subdirectory(mlir)

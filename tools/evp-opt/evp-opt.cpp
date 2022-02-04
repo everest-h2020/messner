@@ -2,8 +2,6 @@
  *
  * @file
  * @author      Karl F. A. Friebel (karl.friebel@tu-dresden.de)
- * @version     0.1.0
- * @date        2022-02-03
  *
  */
 
@@ -12,6 +10,8 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 
+#include "mlir/Dialect/CFDlang/IR/Base.h"
+#include "mlir/Dialect/TeIL/IR/Base.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/InitAllDialects.h"
@@ -21,14 +21,18 @@
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/MlirOptMain.h"
 
+using namespace mlir;
+
 int main(int argc, char* argv[])
 {
-    mlir::registerAllPasses();
+    registerAllPasses();
 
-    mlir::DialectRegistry registry;
+    DialectRegistry registry;
     registerAllDialects(registry);
+    registry.insert<cfdlang::CFDlangDialect>();
+    registry.insert<teil::TeILDialect>();
 
-    return mlir::asMainReturnCode(
-        mlir::MlirOptMain(argc, argv, "evp-tools optimizer driver\n", registry)
+    return asMainReturnCode(
+        MlirOptMain(argc, argv, "evp-tools optimizer driver\n", registry)
     );
 }
