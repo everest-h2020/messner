@@ -17,6 +17,9 @@ def CFDlang_Atom
         : NativeTypeConcept<"::mlir::cfdlang::AtomType", "atom">;
 
 def CFDlang_AtomType
-        : ConstrainedTypeAttr<CFDlang_Atom>;
+        : NativeAttrConcept<"mlir::cfdlang::AtomTypeAttr", "atom type">;
+
+def CFDlang_AtomTypes
+        : NativeAttrConcept<"::mlir::cfdlang::AtomTypeArrayAttr", "atom types">;
 
 #endif

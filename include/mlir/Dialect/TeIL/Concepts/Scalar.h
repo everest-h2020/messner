@@ -7,7 +7,6 @@
 
 #pragma once
 
-#include "mlir/Concepts/Concepts.h"
 #include "mlir/Dialect/TeIL/IR/Types.h"
 
 namespace mlir::teil {

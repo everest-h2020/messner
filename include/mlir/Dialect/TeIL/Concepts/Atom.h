@@ -7,7 +7,6 @@
 
 #pragma once
 
-#include "mlir/Concepts/Concepts.h"
 #include "mlir/Dialect/TeIL/Concepts/Scalar.h"
 #include "mlir/Dialect/TeIL/Concepts/Shape.h"
 
@@ -28,7 +27,7 @@ struct AtomType : ConstrainedType<RankedTensorType, AtomType> {
         shape_t shape = scalar_shape
     )
     {
-        return RankedTensorType::get(scalarType, shape).cast<AtomType>();
+        return RankedTensorType::get(shape, scalarType).cast<AtomType>();
     }
 
     using ConstrainedType<RankedTensorType, AtomType>::ConstrainedType;

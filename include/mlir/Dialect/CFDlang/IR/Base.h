@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "mlir/Concepts/Concepts.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/TeIL/IR/Base.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -15,6 +16,8 @@
 #include "mlir/IR/BuiltinTypes.h"
 
 namespace mlir::cfdlang {
+
+using namespace mlir::concepts;
 
 //===----------------------------------------------------------------------===//
 // Type aliases

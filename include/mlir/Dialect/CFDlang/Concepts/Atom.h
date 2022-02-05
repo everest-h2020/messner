@@ -7,9 +7,9 @@
 
 #pragma once
 
-#include "mlir/Concepts/Concepts.h"
+#include "mlir/Concepts/Fluent.h"
+#include "mlir/Dialect/CFDlang/IR/Types.h"
 #include "mlir/Dialect/TeIL/Concepts/Shape.h"
-#include "mlir/Dialect/TeIL/IR/Types.h"
 
 namespace mlir::cfdlang {
 
@@ -25,10 +25,10 @@ struct AtomType : ConstrainedType<RankedTensorType, AtomType> {
     /** Obtains the AtomType for @p shape . */
     static inline AtomType get(
         MLIRContext *context,
-        shape_t shape = scalar_shape
+        shape_t shape = teil::scalar_shape
     )
     {
-        return RankedTensorType::get(ScalarType::get(context), shape)
+        return RankedTensorType::get(shape, ScalarType::get(context))
             .cast<AtomType>();
     }
 
@@ -60,6 +60,53 @@ struct Atom : ConstrainedValue<AtomType> {
     {
         return getType().getShape();
     }
+};
+
+struct AtomTypeAttr : Concept<TypeAttr> {
+    using ValueType = AtomType;
+
+    static inline bool classof(TypeAttr attr)
+    {
+        return attr.getValue().isa<AtomType>();
+    }
+    static inline bool classof(Attribute attr)
+    {
+        if (auto typeAttr = attr.dyn_cast<TypeAttr>()) {
+            return classof(typeAttr);
+        }
+
+        return false;
+    }
+
+    static AtomTypeAttr get(MLIRContext *context, shape_t atomShape)
+    {
+        return TypeAttr::get(AtomType::get(context, atomShape))
+            .cast<AtomTypeAttr>();
+    }
+
+    using Concept<TypeAttr>::Concept;
+
+    inline AtomType getValue() { return TypeAttr::getValue().cast<AtomType>(); }
+};
+
+struct AtomTypeArrayAttr : ConstrainedArrayAttribute<AtomTypeAttr> {
+    template<class ShapesRange>
+    static AtomTypeArrayAttr get(MLIRContext *context, ShapesRange &&shapes)
+    {
+        return ArrayAttr::get(
+            context,
+            to_vector(
+                llvm::map_range(
+                    shapes,
+                    [=](shape_t x) -> Attribute {
+                        return AtomTypeAttr::get(context, x);
+                    }
+                )
+            )
+        ).template cast<AtomTypeArrayAttr>();
+    }
+
+    using ConstrainedArrayAttribute<AtomTypeAttr>::ConstrainedArrayAttribute;
 };
 
 } // namespace mlir::cfdlang

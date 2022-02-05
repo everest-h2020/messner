@@ -7,8 +7,19 @@
 
 #pragma once
 
+#include "mlir/Dialect/CFDlang/Concepts/Atom.h"
 #include "mlir/Dialect/CFDlang/IR/Types.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/SymbolTable.h"
+
+namespace mlir::cfdlang {
+namespace interface_defaults {
+
+LogicalResult verifyDefinitionOp(Operation *op);
+
+} // namespace interface_defaults
+
+} // namespace mlir::cfdlang
 
 //===- Generated includes -------------------------------------------------===//
 

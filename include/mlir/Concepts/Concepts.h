@@ -270,7 +270,7 @@ struct ConstrainedArrayAttribute : ConstrainedAttribute<
     /** The constrained array element type. */
     using ElementType = typename Attribute::ValueType;
     /** The constrained value type. */
-    using ValueType = ArrayRef<Attribute>;
+    using ValueType = decltype(std::declval<ArrayAttr>().getAsRange<Attribute>());
 
     using ConstrainedAttribute<
         ArrayAttr,
