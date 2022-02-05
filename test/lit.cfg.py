@@ -48,7 +48,8 @@ llvm_config.with_environment('PATH', config.evpt_tools_dir, append_path=True)
 
 tool_dirs = [config.evpt_tools_dir, config.llvm_tools_dir]
 tools = [
-    'evp-opt'
+    'evp-opt',
+    'evp-translate'
 ]
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)
