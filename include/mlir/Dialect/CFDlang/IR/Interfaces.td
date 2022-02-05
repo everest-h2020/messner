@@ -249,7 +249,7 @@ def CFDlang_AtomOp : OpInterface<"AtomOp"> {
             "`AtomOp` is only applicable to `OneResult` ops."
         );
 
-        // Everythin else is verified by the inference traits.
+        // Everything else is verified by the inference traits.
         return success();
     }];
 }

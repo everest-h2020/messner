@@ -10,6 +10,7 @@
 #include "mlir/Dialect/CFDlang/Concepts/Atom.h"
 #include "mlir/Dialect/CFDlang/IR/Interfaces.h"
 #include "mlir/Dialect/CFDlang/IR/Types.h"
+#include "mlir/Dialect/TeIL/Concepts/Natural.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"

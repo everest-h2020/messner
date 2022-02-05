@@ -111,7 +111,7 @@ template<class ShapeRange>
 inline LogicalResult fold(ShapeBuilder &lhs, ShapeRange &&rhs)
 {
     auto r_it = rhs.begin();
-    for (auto l_it = lhs.begin(); l_it != lhs.end(); ++l_it) {
+    for (auto l_it = lhs.begin(); l_it != lhs.end(); ++l_it,++r_it) {
         if (r_it == rhs.end()) {
             // rhs has lower rank.
             return failure();

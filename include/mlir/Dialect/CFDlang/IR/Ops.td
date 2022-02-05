@@ -14,6 +14,7 @@
 include "mlir/Dialect/CFDlang/Concepts/Atom.td"
 include "mlir/Dialect/CFDlang/IR/Interfaces.td"
 include "mlir/Dialect/CFDlang/IR/Types.td"
+include "mlir/Dialect/TeIL/Concepts/Natural.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -32,15 +33,16 @@ def CFDlang_ProgramOp
                 /*AffineScope,*/
                 IsolatedFromAbove,
                 NoRegionArguments,
-                DeclareOpInterfaceMethods<
-                    Symbol,
-                    [/*
-                        "isOptionalSymbol",
-                        "canDiscardOnUseEmpty",
-                        "getVisibility",
-                        "setVisibility"
-                    */]
-                >,
+                Symbol,
+                // DeclareOpInterfaceMethods<
+                //     Symbol,
+                //     [/*
+                //         "isOptionalSymbol",
+                //         "canDiscardOnUseEmpty",
+                //         "getVisibility",
+                //         "setVisibility"
+                //     */]
+                // >,
                 SymbolTable
             ] # GraphRegionNoTerminator.traits
         > {
@@ -381,12 +383,20 @@ class CFDlang_AtomOpBase<
                 // The following native trait implements all the interfaces below.
                 NativeOpTrait<"CFDlang_AtomInference">,
                 InferTypeOpInterface,
+                // NOTE: See Interfaces.h for more information on why we exclude
+                //       this interface.
                 //InferShapedTypeOpInterface,
                 ReifyRankedShapedTypeOpInterface
             ]
         > {
 
     let results = (outs CFDlang_Atom:$result);
+
+    /*let assemblyFormat = [{
+        operands : custom<AtomType>(type(operands)) attr-dict
+    }];*/
+    let printer = [{ ::printAtomOp(p, *this); }];
+    let parser = [{ return ::parseAtomOp<$cppClass>(parser, result); }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -401,11 +411,7 @@ class CFDlang_ArithmeticBase<
 >
         : CFDlang_AtomOpBase<
             mnemonic,
-            traits # [
-                Elementwise,
-                Scalarizable,
-                Tensorizable
-            ],
+            traits,
             overrides # [/*
                 "inferAtomShape",
                 "reifyAtomSize"
@@ -414,9 +420,6 @@ class CFDlang_ArithmeticBase<
 
     let arguments = (ins CFDlang_Atom:$lhs, CFDlang_Atom:$rhs);
     let results = (outs CFDlang_Atom:$result);
-
-    let printer = [{ ::printArithmeticOp(p, *this); }];
-    let parser = [{ return ::parseArithmeticOp(parser, result); }];
 
     code extraClassDeclaration = [{
     //===------------------------------------------------------------------===//
@@ -446,5 +449,37 @@ def CFDlang_AddOp : CFDlang_ArithmeticBase<"add", [Commutative]>;
 def CFDlang_SubOp : CFDlang_ArithmeticBase<"sub">;
 def CFDlang_MulOp : CFDlang_ArithmeticBase<"mul", [Commutative]>;
 def CFDlang_DivOp : CFDlang_ArithmeticBase<"div">;
+
+//===----------------------------------------------------------------------===//
+// ProductOp
+//===----------------------------------------------------------------------===//
+
+def CFDlang_ProductOp
+        : CFDlang_AtomOpBase<
+            "prod",
+            [],
+            ["inferAtomShape", "reifyAtomSize"]
+        > {
+    let arguments = (ins CFDlang_Atom:$lhs, CFDlang_Atom:$rhs);
+}
+
+//===----------------------------------------------------------------------===//
+// ContractOp
+//===----------------------------------------------------------------------===//
+
+def CFDlang_ContractOp
+        : CFDlang_AtomOpBase<
+            "cont",
+            [],
+            ["inferAtomShape", "reifyAtomSize"]
+        > {
+    let arguments = (ins CFDlang_Atom:$operand, TeIL_NatArrayAttr:$indices);
+
+    /*let assemblyFormat = [{
+        $operand : custom<AtomType>(type($operand)) indices custom<NatPairs>($indices) attr-dict
+    }];*/
+    let printer = [{ ::print(p, *this); }];
+    let parser = [{ return ::parseContractOp(parser, result); }];
+}
 
 #endif

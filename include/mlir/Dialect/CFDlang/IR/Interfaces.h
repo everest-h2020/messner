@@ -9,6 +9,7 @@
 
 #include "mlir/Dialect/CFDlang/Concepts/Atom.h"
 #include "mlir/Dialect/CFDlang/IR/Types.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/SymbolTable.h"
 
@@ -131,6 +132,11 @@ public:
     }
 
     // InferShapedTypeOpInterface
+    // NOTE: Takes precedence over ReifyRankedShapedTypeOpInterface, but is
+    //       worse for our purposes. Additionally, methods have default impl.,
+    //       so this delegate-to-trait mechanism does not work, as the call will
+    //       be ambiguous. Don't see a reason to support this at all, but this
+    //       is how:
     // static LogicalResult inferReturnTypeComponents(
     //     MLIRContext *context,
     //     Optional<Location> location,
@@ -158,6 +164,26 @@ public:
 
     //     return failure();
     // }
+    // LogicalResult reifyReturnTypeShapes(
+    //     OpBuilder &builder,
+    //     ValueRange operands,
+    //     SmallVectorImpl<Value> &reifiedReturnShapes
+    // )
+    // {
+    //     ReifiedRankedShapedTypeDims resultShapes;
+    //     if (failed(reifyResultShapes(builder, resultShapes))) return failure();
+
+    //     for (auto resultShape : resultShapes) {
+    //         reifiedReturnShapes.push_back(
+    //             builder.create<tensor::FromElementsOp>(
+    //                 this->getOperation()->getLoc(),
+    //                 resultShape
+    //             ).getResult()
+    //         );
+    //     }
+
+    //     return success();
+    // }
 
     // ReifyRankedShapedTypeOpInterface
     LogicalResult reifyResultShapes(
@@ -168,16 +194,14 @@ public:
         auto concreteOp = cast<ConcreteType>(this->getOperation());
 
         auto atomSize = concreteOp.reifyAtomSize(builder);
-        if (succeeded(atomSize)) {
-            return cfdlang::interface_defaults::reifyResultShapes(
-                *atomSize,
-                builder,
-                concreteOp.getLoc(),
-                reifiedReturnShapes
-            );
-        }
+        if (failed(atomSize)) return failure();
 
-        return failure();
+        return cfdlang::interface_defaults::reifyResultShapes(
+            *atomSize,
+            builder,
+            concreteOp.getLoc(),
+            reifiedReturnShapes
+        );
     }
 };
 
