@@ -111,6 +111,34 @@ static ParseResult parseAtomTypeAttr(OpAsmParser &p, TypeAttr &attr)
 
 void YieldOp::build(OpBuilder&, OperationState&) {}
 
+//===----------------------------------------------------------------------===//
+// EvalOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult EvalOp::verifySymbolUses(SymbolTableCollection &symbolTable)
+{
+    // Find the matching declaration.
+    auto declaration = symbolTable.lookupNearestSymbolFrom<DeclarationOp>(
+        *this,
+        name()
+    );
+
+    if (!declaration) {
+        return emitOpError()
+            << "'" << name() << "' does not reference a valid symbol";
+    }
+
+    // Check that our use is consistent with the declared type.
+    if (declaration.getAtomType() != getResult().getType()) {
+        return emitOpError()
+            << "result type " << getResult().getType()
+            << " does not match declared type " << declaration.getAtomType()
+            << " of symbol @" << name();
+    }
+
+    return success();
+}
+
 //===- Generated implementation -------------------------------------------===//
 
 #define GET_OP_CLASSES

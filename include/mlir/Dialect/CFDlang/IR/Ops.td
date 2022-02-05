@@ -111,6 +111,25 @@ class CFDlang_DeclarationBase<
 
     let arguments = (ins SymbolNameAttr:$sym_name, CFDlang_AtomType:$type);
 
+    let builders = [
+        OpBuilder<(ins "Twine":$name, "AtomType":$atomType), [{
+            build(
+                $_builder,
+                $_state,
+                $_builder.getStringAttr(name),
+                AtomTypeAttr::get(atomType)
+            );
+        }]>,
+        OpBuilder<(ins "Twine":$name, CArg<"shape_t", "teil::scalar_shape">:$shape), [{
+            build(
+                $_builder,
+                $_state,
+                name,
+                AtomType::get($_builder.getContext(), shape)
+            );
+        }]>
+    ];
+
     let assemblyFormat = "$sym_name `:` custom<AtomTypeAttr>($type) attr-dict";
 }
 
@@ -149,7 +168,9 @@ def CFDlang_InputOp
     bool isDeclaration()
     {
         // Always just a declaration.
-        return true;
+        // BUG: The verifier seems to ignore getVisibility() and thus we need
+        //      to return false here or the thing fails.
+        return false;
     }
     bool canDiscardOnUseEmpty()
     {
@@ -191,7 +212,7 @@ class CFDlang_DefinitionBase<
     let regions = (region SizedRegion<1>:$body);
 
     let assemblyFormat = [{
-        $sym_name `:` custom<AtomTypeAttr>($type) attr-dict $body
+        $sym_name `:` custom<AtomTypeAttr>($type) attr-dict-with-keyword $body
     }];
 }
 
@@ -304,6 +325,41 @@ def CFDlang_YieldOp
     let builders = [OpBuilder<(ins), "">];
 
     let assemblyFormat = "$atom `:` custom<AtomType>(type($atom)) attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// EvalOp
+//===----------------------------------------------------------------------===//
+
+def CFDlang_EvalOp
+        : CFDlang_Op<
+            "eval",
+            [
+                NoSideEffect,
+                DeclareOpInterfaceMethods<
+                    SymbolUserOpInterface,
+                    ["verifySymbolUses"]
+                >
+            ]
+        > {
+    let summary = "Atom evaluation";
+    let description = [{
+        The `cfdlang.eval` operation requests the evaluation of an atom symbol
+        with the specified name. It materializes an SSA value for a symbol.
+
+        Example:
+        ```mlir
+        %S = cfdlang.eval @S : [11 11]
+        ```
+    }];
+
+    // TODO: Operands for defines with arguments?
+    let arguments = (ins SymbolRefAttr:$name);
+    let results = (outs CFDlang_Atom:$result);
+
+    let assemblyFormat = [{
+        $name `:` custom<AtomType>(type($result)) attr-dict
+    }];
 }
 
 #endif

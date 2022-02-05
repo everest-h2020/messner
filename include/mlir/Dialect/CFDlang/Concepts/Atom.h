@@ -78,10 +78,13 @@ struct AtomTypeAttr : Concept<TypeAttr> {
         return false;
     }
 
+    static AtomTypeAttr get(AtomType atomType)
+    {
+        return TypeAttr::get(atomType).cast<AtomTypeAttr>();
+    }
     static AtomTypeAttr get(MLIRContext *context, shape_t atomShape)
     {
-        return TypeAttr::get(AtomType::get(context, atomShape))
-            .cast<AtomTypeAttr>();
+        return get(AtomType::get(context, atomShape));
     }
 
     using Concept<TypeAttr>::Concept;
