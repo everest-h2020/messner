@@ -9,6 +9,7 @@
 
 #include "mlir/Concepts/Fluent.h"
 #include "mlir/Dialect/CFDlang/IR/Types.h"
+#include "mlir/Dialect/TeIL/Concepts/AtomSize.h"
 #include "mlir/Dialect/TeIL/Concepts/Shape.h"
 
 namespace mlir::cfdlang {

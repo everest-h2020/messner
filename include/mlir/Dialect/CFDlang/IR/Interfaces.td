@@ -11,6 +11,7 @@
 #ifndef CFDLANG_INTERFACES
 #define CFDLANG_INTERFACES
 
+include "mlir/Concepts/Inference.td"
 include "mlir/IR/OpBase.td"
 
 //===----------------------------------------------------------------------===//
@@ -147,5 +148,115 @@ def CFDlang_DefinitionOp : OpInterface<"DefinitionOp"> {
         return interface_defaults::verifyDefinitionOp($_op);
     }];
 }
+
+//===----------------------------------------------------------------------===//
+// AtomOp
+//===----------------------------------------------------------------------===//
+
+def CFDlang_AtomOp : OpInterface<"AtomOp"> {
+    let cppNamespace = "::mlir::cfdlang";
+
+    let description = [{
+        Interface for a CFDlang operation that computes an atom.
+    }];
+
+    let methods = [
+        StaticInterfaceMethod<
+            /*desc=*/[{
+                Given the build arguments to an operation of this type, infers
+                the shape of the result atom.
+            }],
+            /*retTy=*/"LogicalResult",
+            /*methodName=*/"inferAtomShape",
+            /*args=*/!con(
+                InferenceMethod.arguments,
+                (ins "teil::ShapeBuilder&":$atomShape)
+            ),
+            /*methodBody=*/"",
+            /*defaultImplementation=*/[{
+                return failure();
+            }]
+        >,
+        StaticInterfaceMethod<
+            /*desc=*/[{
+                Given the build arguments to an operation of this type, infers
+                the type of the result atom, or nullptr on error.
+            }],
+            /*retTy=*/"AtomType",
+            /*methodName=*/"inferAtomType",
+            /*args=*/InferenceMethod.arguments,
+            /*methodBody=*/InferenceMethodImpl<[{
+                return interface_defaults::inferAtomType<ConcreteOp>($_args);
+            }]>.body,
+            /*defaultImplementation=*/""
+        >,
+
+        InterfaceMethod<
+            /*desc=*/[{
+                Returns the atom type.
+            }],
+            /*retTy=*/"AtomType",
+            /*methodName=*/"getAtomType",
+            /*args=*/(ins),
+            /*methodBody=*/[{
+                return cast<AtomOp>($_op.getOperation()).getAtom().getType();
+            }],
+            /*defaultImplementation=*/""
+        >,
+        InterfaceMethod<
+            /*desc=*/[{
+                Returns the atom shape.
+            }],
+            /*retTy=*/"shape_t",
+            /*methodName=*/"getAtomShape",
+            /*args=*/(ins),
+            /*methodBody=*/[{
+                return cast<AtomOp>($_op.getOperation()).getAtomType()
+                    .getShape();
+            }],
+            /*defaultImplementation=*/""
+        >,
+        InterfaceMethod<
+            /*desc=*/[{
+                Returns the atom value.
+            }],
+            /*retTy=*/"Atom",
+            /*methodName=*/"getAtom",
+            /*args=*/(ins),
+            /*methodBody=*/[{
+                return $_op.getResult().template cast<Atom>();
+            }],
+            /*defaultImplementation=*/""
+        >,
+        InterfaceMethod<
+            /*desc=*/[{
+                Obtains the AtomSize of the result atom, potentially inserting
+                new operations using the provided builder.
+            }],
+            /*retTy=*/"FailureOr<teil::AtomSize>",
+            /*methodName=*/"reifyAtomSize",
+            /*args=*/(ins "OpBuilder&":$builder),
+            /*methodBody=*/"",
+            /*defaultImplementation=*/[{
+                return failure();
+            }]
+        >
+    ];
+
+    code verify = [{
+        static_assert(
+            ConcreteOp::template hasTrait<::mlir::OpTrait::OneResult>(),
+            "`AtomOp` is only applicable to `OneResult` ops."
+        );
+
+        // Everythin else is verified by the inference traits.
+        return success();
+    }];
+}
+
+// Native trait that implements the InferTypeOpInterface,
+// InferShapedTypeOpInterface and ReifyRankedShapedTypeOpInterface interfaces
+// using the AtomOp interface.
+def CFDlang_AtomInference : NativeOpTrait<"CFDlang_AtomInference">;
 
 #endif

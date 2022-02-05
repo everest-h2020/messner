@@ -96,6 +96,42 @@ inline Optional<std::size_t> calculateSmallExtent(ShapeRange &&shape)
     return result;
 }
 
+/** Attempts to fold @p rhs into @p lhs .
+ *
+ * If @p lhs contains dynamic dimensions, they will be replaced by their
+ * respective counterparts in @p rhs . If both offer mismatched sizes, the
+ * fold operation will fail.
+ *
+ * @param   [in,out]    lhs Left shape.
+ * @param   [in]        rhs Right shape.
+ *
+ * @returns Whether folding was successful.
+ */
+template<class ShapeRange>
+inline LogicalResult fold(ShapeBuilder &lhs, ShapeRange &&rhs)
+{
+    auto r_it = rhs.begin();
+    for (auto l_it = lhs.begin(); l_it != lhs.end(); ++l_it) {
+        if (r_it == rhs.end()) {
+            // rhs has lower rank.
+            return failure();
+        }
+
+        if (*l_it == dynamic_size) {
+            // Fold rhs into lhs.
+            *l_it = *r_it;
+            continue;
+        }
+
+        if (*l_it != *r_it && *r_it != dynamic_size) {
+            // Dimension sizes mismatched.
+            return failure();
+        }
+    }
+
+    return success(r_it == rhs.end());
+}
+
 //===----------------------------------------------------------------------===//
 // Shape concepts
 //===----------------------------------------------------------------------===//

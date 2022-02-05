@@ -139,6 +139,33 @@ LogicalResult EvalOp::verifySymbolUses(SymbolTableCollection &symbolTable)
     return success();
 }
 
+//===----------------------------------------------------------------------===//
+// ArithmeticOp
+//===----------------------------------------------------------------------===//
+
+static void printArithmeticOp(OpAsmPrinter &p, Operation *op)
+{
+    p << op->getName();
+    p.printOperands(op->getOperands());
+    p << " : ";
+    printAtomType(p, op, op->getResult(0).getType());
+    p.printOptionalAttrDict(op->getAttrs());
+}
+static ParseResult parseArithmeticOp(
+    OpAsmParser &p,
+    OperationState &result
+)
+{
+    SmallVector<OpAsmParser::OperandType> operands;
+    if (p.parseOperandList(operands)) return failure();
+    if (p.parseColon()) return failure();
+    AtomType atomType;
+    if (parseAtomType(p, atomType)) return failure();
+    result.types.push_back(atomType);
+    if (p.parseOptionalAttrDict(result.attributes)) return failure();
+    return p.resolveOperands(operands, atomType, result.operands);
+}
+
 //===- Generated implementation -------------------------------------------===//
 
 #define GET_OP_CLASSES

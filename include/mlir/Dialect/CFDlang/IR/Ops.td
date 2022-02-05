@@ -15,6 +15,7 @@ include "mlir/Dialect/CFDlang/Concepts/Atom.td"
 include "mlir/Dialect/CFDlang/IR/Interfaces.td"
 include "mlir/Dialect/CFDlang/IR/Types.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/IR/RegionKindInterface.td"
 include "mlir/IR/SymbolInterfaces.td"
@@ -361,5 +362,89 @@ def CFDlang_EvalOp
         $name `:` custom<AtomType>(type($result)) attr-dict
     }];
 }
+
+//===----------------------------------------------------------------------===//
+// AtomOp
+//===----------------------------------------------------------------------===//
+
+// Template for atom ops.
+class CFDlang_AtomOpBase<
+    string mnemonic,
+    list<OpTrait> traits = [],
+    list<string> overrides = []
+>
+        : CFDlang_Op<
+            mnemonic,
+            traits # [
+                NoSideEffect,
+                DeclareOpInterfaceMethods<CFDlang_AtomOp, overrides>,
+                // The following native trait implements all the interfaces below.
+                NativeOpTrait<"CFDlang_AtomInference">,
+                InferTypeOpInterface,
+                //InferShapedTypeOpInterface,
+                ReifyRankedShapedTypeOpInterface
+            ]
+        > {
+
+    let results = (outs CFDlang_Atom:$result);
+}
+
+//===----------------------------------------------------------------------===//
+// ArithmeticOp
+//===----------------------------------------------------------------------===//
+
+// Template for arithmetic ops.
+class CFDlang_ArithmeticBase<
+    string mnemonic,
+    list<OpTrait> traits = [],
+    list<string> overrides = []
+>
+        : CFDlang_AtomOpBase<
+            mnemonic,
+            traits # [
+                Elementwise,
+                Scalarizable,
+                Tensorizable
+            ],
+            overrides # [/*
+                "inferAtomShape",
+                "reifyAtomSize"
+            */]
+        > {
+
+    let arguments = (ins CFDlang_Atom:$lhs, CFDlang_Atom:$rhs);
+    let results = (outs CFDlang_Atom:$result);
+
+    let printer = [{ ::printArithmeticOp(p, *this); }];
+    let parser = [{ return ::parseArithmeticOp(parser, result); }];
+
+    code extraClassDeclaration = [{
+    //===------------------------------------------------------------------===//
+    // AtomOp
+    //===------------------------------------------------------------------===//
+
+    static LogicalResult inferAtomShape(
+        MLIRContext*,
+        Optional<Location>,
+        ValueRange operands,
+        DictionaryAttr,
+        RegionRange,
+        teil::ShapeBuilder &atomShape
+    )
+    {
+        return interface_defaults::inferAtomShape(operands, atomShape);
+    }
+
+    FailureOr<teil::AtomSize> reifyAtomSize(OpBuilder &builder)
+    {
+        return interface_defaults::reifyAtomSize(builder, *this);
+    }
+    }];
+}
+
+def CFDlang_AddOp : CFDlang_ArithmeticBase<"add", [Commutative]>;
+def CFDlang_SubOp : CFDlang_ArithmeticBase<"sub">;
+def CFDlang_MulOp : CFDlang_ArithmeticBase<"mul", [Commutative]>;
+def CFDlang_DivOp : CFDlang_ArithmeticBase<"div">;
 
 #endif
