@@ -10,6 +10,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/WithColor.h"
 #include "mlir/Dialect/CFDlang/IR/Ops.h"
+#include "mlir/Target/CFDlang/Utils/PrintDriver.h"
 #include "mlir/Target/CFDlang/CLI.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Translation.h"
@@ -21,8 +22,9 @@ using namespace mlir::cfdlang;
 
 static LogicalResult exportProgram(ProgramOp program, raw_ostream &output)
 {
-    // TODO: Implement.
-    return failure();
+    cfdlang::detail::PrintDriver driver(output);
+    driver.print(program);
+    return success();
 }
 
 static LogicalResult exportModule(ModuleOp module, raw_ostream &output)

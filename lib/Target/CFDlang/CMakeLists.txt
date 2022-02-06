@@ -33,6 +33,7 @@ include_directories(
 
 add_mlir_translation_library(${PROJECT_NAME}
         Utils/ParseDriver.cpp
+        Utils/PrintDriver.cpp
 
         CLI.cpp
         Export.cpp
