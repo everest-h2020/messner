@@ -1,0 +1,161 @@
+%skeleton "lalr1.cc"
+%require  "3.5"
+%language "c++"
+
+%defines
+%define api.namespace       {mlir::cfdlang::detail}
+%define api.parser.class    {Parser}
+%define api.token.constructor true
+%define api.value.type      variant
+%define api.location.type   {mlir::concepts::ImportRange}
+%define parse.assert        false
+%define parse.error         verbose
+
+%locations
+
+%code requires{
+#include "mlir/Concepts/Translation.h"
+#include "mlir/Target/CFDlang/Utils/ParseDriver.h"
+
+#include <vector>
+
+namespace mlir::cfdlang::detail {
+    class Tokenizer;
+} // namespace mlir::cfdlang::detail
+}
+
+%parse-param                { ParseDriver &driver }
+
+%{
+#include "Tokenizer.h"
+
+#undef  yylex
+#define yylex               driver.tokenizer().lex
+%}
+
+%token                      END 0 "end of input"
+
+%token                      KW_VAR
+%token                      KW_INPUT
+%token                      KW_OUTPUT
+%token                      KW_TYPE
+
+%token<natural_t>           NAT
+%token<dim_size_t>          INT
+%token<StringRef>           NAME
+
+%type<DeclarationKind>      iospec;
+%type<AtomType>             type_expr;
+%type<DimList>              dim_list;
+%type<dim_size_t>           dim_size;
+%type<AtomOp>               expr;
+%type<AtomOp>               term;
+%type<AtomOp>               factor;
+%type<NatList>              nat_pairs;
+%type<AtomOp>               atom;
+
+%%
+
+program         : { driver.program(); } decl_list stmt_list
+                ;
+
+decl_list       : decl_list decl
+                | %empty
+                ;
+
+decl            : var_decl
+                | type_decl
+                ;
+
+var_decl        : KW_VAR iospec[kind] NAME[id] ':' type_expr[type] {
+                    if (!driver.decl(@id, $id, $type, $kind)) YYABORT;
+                }
+                ;
+
+iospec          : KW_INPUT { $$ = DeclarationKind::Input; }
+                | KW_OUTPUT { $$ = DeclarationKind::Output; }
+                | %empty { $$ = DeclarationKind::Variable; }
+                ;
+
+type_expr       : NAME { if (!($$ = driver.type_expr(@1, $1))) YYABORT; }
+                | '[' dim_list[shape] ']' {
+                    if (!($$ = driver.type_expr(@shape, $shape))) YYABORT;
+                }
+                ;
+
+dim_list        : dim_list dim_size { std::swap($$, $1); $$.push_back($2); }
+                | %empty { $$ = DimList(); }
+                ;
+
+dim_size        : NAT { $$ = static_cast<dim_size_t>($1); }
+                | '?' { $$ = teil::dynamic_size; }
+                ;
+
+type_decl       : KW_TYPE NAME[id] ':' type_expr[type] {
+                    if (!driver.decl(@id, $id, $type, DeclarationKind::Type))
+                        YYABORT;
+                }
+                ;
+
+stmt_list       : stmt_list stmt
+                | %empty
+                ;
+
+stmt            : NAME[id] '=' { if (!driver.stmt_begin(@id, $id)) YYABORT; }
+                  expr { if (!driver.stmt_end(@expr, $id, $expr)) YYABORT; }
+                ;
+
+expr            : term
+                | term[lhs] '+' expr[rhs] {
+                    if (!($$ = driver.add(@2, $lhs, $rhs))) YYABORT;
+                }
+                | term[lhs] '-' expr[rhs] {
+                    if (!($$ = driver.sub(@2, $lhs, $rhs))) YYABORT;
+                }
+                ;
+
+term            : factor
+                | factor[lhs] '*' term[rhs] {
+                    if (!($$ = driver.mul(@2, $lhs, $rhs))) YYABORT;
+                }
+                | factor[lhs] '/' term[rhs] {
+                    if (!($$ = driver.div(@2, $lhs, $rhs))) YYABORT;
+                }
+                | factor[op] '.' '[' nat_pairs[indices] ']' {
+                    if (!($$ = driver.cont(@2, $op, std::move($indices))))
+                        YYABORT;
+                }
+                ;
+
+factor          : atom
+                | atom[lhs] '#' factor[rhs] {
+                    if (!($$ = driver.prod(@2, $lhs, $rhs))) YYABORT;
+                }
+                /* | atom[op] '^' '[' NAT[i] NAT[j] ']' {
+                    if (!($$ = driver.tran($op, $i, $j))) YYABORT;
+                } */
+                ;
+
+nat_pairs       : nat_pairs '[' NAT[i] NAT[j] ']' {
+                    std::swap($$, $1);
+                    $$.push_back($i);
+                    $$.push_back($j);
+                }
+                | %empty { $$ = NatList(); }
+                ;
+
+atom            : NAME { if (!($$ = driver.eval(@1, $1))) YYABORT; }
+                /* | INT { if (!($$ = driver.const($1))) YYABORT; } */
+                | '(' expr ')' { $$ = $expr; }
+                ;
+
+%%
+
+void mlir::cfdlang::detail::Parser::error(
+    const location_type &location,
+    const std::string &message
+)
+{
+    // TODO: Abort and recovery handling.
+    driver.error(location, message);
+}

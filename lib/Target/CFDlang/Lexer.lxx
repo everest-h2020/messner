@@ -1,0 +1,86 @@
+%option bison-complete bison-locations noyywrap
+%option bison-cc-namespace=mlir::cfdlang::detail bison-cc-parser=Parser
+%option namespace=mlir::cfdlang::detail lexer=Lexer
+%option YYLTYPE=mlir::concepts::ImportRange
+
+%top{
+#include "mlir/Concepts/Translation.h"
+#include "mlir/Target/CFDlang/Utils/LexerSupport.h"
+#include "Parser.hpp"
+%}
+
+%class{
+    unsigned            m_errors;
+    ImportContext       *m_context;
+
+public:
+    unsigned&           errors() { return m_errors; }
+    const unsigned&     errors() const { return m_errors; }
+
+    ImportContext&      getContext() const { return *m_context; }
+
+    bool                consumeError(
+        ImportLocation location,
+        const Twine &message
+    )
+    {
+        // Use the ImportContext to report the errors.
+        getContext().emitError(location, message);
+        // Allow 10 errors before aborting.
+        return errors()++ < 10;
+    }
+    bool                consumeError(
+        ImportRange location,
+        const Twine &message
+    )
+    {
+        // Use the ImportContext to report the errors.
+        getContext().emitError(location, message);
+        // Allow 10 errors before aborting.
+        return errors()++ < 10;
+    }
+}
+%option ctorarg="ImportContext &context"
+%init{
+    m_errors = 0;
+    m_context = &context;
+}
+
+punct                       ":"|"("|")"|"["|"]"|"."|"+"|"-"|"*"|"/"|"#"|"^"|"="|"?"
+
+%%
+
+\s+                         /* ignore whitespace */
+"//".+                      /* ignore line comment */
+"/*"(.|\n)*?"*/"            /* ignore multiline comment */
+
+"var"                       { return Parser::make_KW_VAR(location()); }
+"input"                     { return Parser::make_KW_INPUT(location()); }
+"output"                    { return Parser::make_KW_OUTPUT(location()); }
+"type"                      { return Parser::make_KW_TYPE(location()); }
+
+{punct}                     {
+    return Parser::symbol_type(chr(), location());
+}
+[0-9]+                      {
+    return Parser::make_NAT(parseInt<natural_t>(text(), size()), location());
+}
+-[0-9]+                     {
+    return Parser::make_INT(parseInt<dim_size_t>(text(), size()), location());
+}
+[_a-zA-Z][_a-zA-Z0-9]*      {
+    return Parser::make_NAME(StringRef(text(), size()), location());
+}
+
+.                           {
+    // Emit an error diagnostic.
+    const auto loc = location();
+    if (!consumeError(loc.begin, "Invalid character.")) {
+        // Abort.
+        return Parser::make_END(location());
+    }
+}
+
+<<EOF>>                     { return Parser::make_END(location()); }
+
+%%

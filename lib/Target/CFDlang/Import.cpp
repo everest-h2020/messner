@@ -8,9 +8,11 @@
 #include "mlir/Target/CFDlang/Import.h"
 
 #include "mlir/Dialect/CFDlang/IR/Ops.h"
+#include "mlir/Target/CFDlang/Utils/ParseDriver.h"
 #include "mlir/Target/CFDlang/CLI.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Translation.h"
+#include "Tokenizer.h"
 
 using namespace mlir;
 using namespace mlir::cfdlang;
@@ -20,8 +22,14 @@ static OwningOpRef<cfdlang::ProgramOp> importProgram(
     MLIRContext *context
 )
 {
-    // TODO: Implement.
-    return {};
+    // Invoke the parser and convert to nullptr-style success indicator.
+    ImportContext importContext(context, source);
+    cfdlang::detail::ParseDriver driver(importContext);
+    if (failed(driver.parse())) {
+        return {};
+    }
+
+    return driver.takeResult();
 }
 
 static OwningModuleRef importModule(
@@ -47,6 +55,9 @@ void mlir::cfdlang::registerImport()
     TranslateToMLIRRegistration registration(
         "import-cfdlang",
         [](llvm::SourceMgr &sourceMgr, MLIRContext *context) {
+            // Load dialects.
+            context->loadDialect<CFDlangDialect>();
+            // Call importer.
             return ::importModule(sourceMgr, context);
         }
     );

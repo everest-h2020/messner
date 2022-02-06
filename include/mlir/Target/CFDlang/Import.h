@@ -7,6 +7,10 @@
 
 #pragma once
 
+#include "mlir/Dialect/CFDlang/IR/Ops.h"
+
+#include "mlir/Concepts/Translation.h"
+
 namespace mlir::cfdlang {
 
 /** Register the import translation. */

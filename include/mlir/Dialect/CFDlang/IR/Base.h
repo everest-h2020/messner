@@ -29,6 +29,8 @@ using teil::dim_size_t;
 using teil::shape_t;
 using teil::rank_t;
 
+using nat_indices_t = ArrayRef<natural_t>;
+
 } // namespace mlir::cfdlang
 
 //===- Generated includes -------------------------------------------------===//

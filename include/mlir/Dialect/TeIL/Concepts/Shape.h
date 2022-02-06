@@ -96,6 +96,37 @@ inline Optional<std::size_t> calculateSmallExtent(ShapeRange &&shape)
     return result;
 }
 
+/** Determines whether @p lhs is compatible (foldable) with @p rhs .
+ *
+ * If @p lhs and @p rhs contains mismatching non-dynamic dimensions, they will
+ * be rejected.
+ *
+ * @param   [in]        lhs Left shape.
+ * @param   [in]        rhs Right shape.
+ *
+ * @return  Whether @p lhs and @p rhs are compatible.
+ */
+inline bool are_compatible(shape_t lhs, shape_t rhs)
+{
+    if (lhs.size() != rhs.size()) {
+        // Rank mismatch.
+        return false;
+    }
+
+    for (
+        auto [l, r] = std::make_pair(lhs.begin(), rhs.begin());
+        l != lhs.end();
+        ++l,++r
+    ) {
+        if (*l != *r && *l != dynamic_size && *r != dynamic_size) {
+            // Dimension mismatch.
+            return false;
+        }
+    }
+
+    return true;
+}
+
 /** Attempts to fold @p rhs into @p lhs .
  *
  * If @p lhs contains dynamic dimensions, they will be replaced by their

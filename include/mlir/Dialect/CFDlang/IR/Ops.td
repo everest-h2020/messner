@@ -65,6 +65,28 @@ def CFDlang_ProgramOp
 
     let assemblyFormat = "($sym_name^)? attr-dict-with-keyword $body";
 
+    let builders = [
+        OpBuilder<(ins CArg<"StringAttr", "nullptr">:$name), [{
+            $_state.addRegion()->emplaceBlock();
+            if (name) {
+                $_state.addAttribute(
+                    mlir::SymbolTable::getSymbolAttrName(),
+                    name
+                );
+            }
+        }]>,
+        OpBuilder<(ins CArg<"StringRef", "">:$name), [{
+            build(
+                $_builder,
+                $_state,
+                name.empty()
+                    ? nullptr
+                    : $_builder.getStringAttr(name)
+            );
+        }]>
+    ];
+    let skipDefaultBuilders = 1;
+
     code extraClassDeclaration = [{
     Optional<StringRef> getName() { return sym_name(); }
 
@@ -214,6 +236,21 @@ class CFDlang_DefinitionBase<
     let arguments = (ins SymbolNameAttr:$sym_name, CFDlang_AtomType:$type);
     let regions = (region SizedRegion<1>:$body);
 
+    let builders = [
+        OpBuilder<(ins "StringAttr":$name, "AtomType":$atomType), [{
+            $_state.addRegion()->emplaceBlock();
+            $_state.addAttribute(
+                mlir::SymbolTable::getSymbolAttrName(),
+                name
+            );
+            $_state.addAttribute("type", TypeAttr::get(atomType));
+        }]>,
+        OpBuilder<(ins "const Twine&":$name, "AtomType":$atomType), [{
+            build($_builder, $_state, $_builder.getStringAttr(name), atomType);
+        }]>
+    ];
+    let skipDefaultBuilders = 1;
+
     let assemblyFormat = [{
         $sym_name `:` custom<AtomTypeAttr>($type) attr-dict-with-keyword $body
     }];
@@ -342,6 +379,10 @@ def CFDlang_EvalOp
                 DeclareOpInterfaceMethods<
                     SymbolUserOpInterface,
                     ["verifySymbolUses"]
+                >,
+                DeclareOpInterfaceMethods<
+                    CFDlang_AtomOp,
+                    [/*"inferAtomType", "reifyAtomSize"*/]
                 >
             ]
         > {
@@ -362,6 +403,31 @@ def CFDlang_EvalOp
 
     let assemblyFormat = [{
         $name `:` custom<AtomType>(type($result)) attr-dict
+    }];
+
+    code extraClassDeclaration = [{
+    //===------------------------------------------------------------------===//
+    // AtomOp
+    //===------------------------------------------------------------------===//
+
+    static LogicalResult inferAtomShape(
+        MLIRContext*,
+        Optional<Location>,
+        ValueRange operands,
+        DictionaryAttr,
+        RegionRange,
+        teil::ShapeBuilder &atomShape
+    )
+    {
+        // TODO: Implement.
+        return failure();
+    }
+
+    FailureOr<teil::AtomSize> reifyAtomSize(OpBuilder &builder)
+    {
+        // TODO: Implement.
+        return failure();
+    }
     }];
 }
 
@@ -474,6 +540,17 @@ def CFDlang_ContractOp
             ["inferAtomShape", "reifyAtomSize"]
         > {
     let arguments = (ins CFDlang_Atom:$operand, TeIL_NatArrayAttr:$indices);
+
+    let builders = [
+        OpBuilder<(ins "Atom":$operand, "nat_indices_t":$indices), [{
+            build(
+                $_builder,
+                $_state,
+                operand,
+                teil::NatArrayAttr::get($_builder.getContext(), indices)
+            );
+        }]>
+    ];
 
     /*let assemblyFormat = [{
         $operand : custom<AtomType>(type($operand)) indices custom<NatPairs>($indices) attr-dict
