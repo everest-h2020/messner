@@ -3,6 +3,7 @@ add_mlir_dialect_library(CFDlangDialect
         IR/Interfaces.cpp
         IR/Ops.cpp
         IR/Types.cpp
+        Transforms/ContractionFactorization.cpp
 
     LINK_COMPONENTS
         Core
@@ -10,4 +11,5 @@ add_mlir_dialect_library(CFDlangDialect
     DEPENDS
         CFDlangIRIncGen
         CFDlangInterfacesIncGen
+        CFDlangPassesIncGen
 )

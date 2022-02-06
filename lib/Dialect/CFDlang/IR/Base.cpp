@@ -7,6 +7,8 @@
 
 #include "mlir/Dialect/CFDlang/IR/Base.h"
 
+#include "mlir/Dialect/CFDlang/IR/Ops.h"
+
 using namespace mlir;
 using namespace mlir::cfdlang;
 
@@ -27,6 +29,10 @@ Operation *CFDlangDialect::materializeConstant(
     Location loc
 )
 {
+    if (auto symbolRef = value.dyn_cast<SymbolRefAttr>()) {
+        return builder.create<EvalOp>(loc, type, symbolRef);
+    }
+
     // TODO: Implement.
     return nullptr;
 }

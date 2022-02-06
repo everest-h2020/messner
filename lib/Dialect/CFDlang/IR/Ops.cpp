@@ -140,6 +140,12 @@ LogicalResult EvalOp::verifySymbolUses(SymbolTableCollection &symbolTable)
     return success();
 }
 
+OpFoldResult EvalOp::fold(ArrayRef<Attribute> operands)
+{
+    // TODO: ???
+    return OpFoldResult(nameAttr());
+}
+
 //===----------------------------------------------------------------------===//
 // AtomOp
 //===----------------------------------------------------------------------===//

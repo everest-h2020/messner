@@ -10,6 +10,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "mlir/Dialect/CFDlang/IR/Base.h"
+#include "mlir/Dialect/CFDlang/Passes.h"
 #include "mlir/Dialect/TeIL/IR/Base.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/MLIRContext.h"
@@ -30,6 +31,8 @@ int main(int argc, char *argv[])
     registerAllDialects(registry);
     registry.insert<cfdlang::CFDlangDialect>();
     registry.insert<teil::TeILDialect>();
+
+    registerCFDlangPasses();
 
     return asMainReturnCode(
         MlirOptMain(argc, argv, "evp-tools optimizer driver\n", registry)

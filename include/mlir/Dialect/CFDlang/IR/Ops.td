@@ -29,7 +29,6 @@ def CFDlang_ProgramOp
         : CFDlang_Op<
             "program",
             [
-                NoSideEffect,
                 /*AffineScope,*/
                 IsolatedFromAbove,
                 NoRegionArguments,
@@ -126,7 +125,6 @@ class CFDlang_DeclarationBase<
         : CFDlang_Op<
             mnemonic,
             traits # [
-                NoSideEffect,
                 IsolatedFromAbove,
                 DeclareOpInterfaceMethods<Symbol, overrides>,
                 DeclareOpInterfaceMethods<CFDlang_DeclarationOp, overrides>,
@@ -376,6 +374,7 @@ def CFDlang_EvalOp
             "eval",
             [
                 NoSideEffect,
+                ConstantLike,
                 DeclareOpInterfaceMethods<
                     SymbolUserOpInterface,
                     ["verifySymbolUses"]
@@ -400,6 +399,8 @@ def CFDlang_EvalOp
     // TODO: Operands for defines with arguments?
     let arguments = (ins SymbolRefAttr:$name);
     let results = (outs CFDlang_Atom:$result);
+
+    let hasFolder = 1;
 
     let assemblyFormat = [{
         $name `:` custom<AtomType>(type($result)) attr-dict

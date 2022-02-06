@@ -1,0 +1,9 @@
+var input S   : [11 11]
+var input D   : [11 11 11]
+var input u   : [11 11 11]
+var output v  : [11 11 11]
+var t         : [11 11 11]
+var r         : [11 11 11]
+t = S # S # S # u . [[1 6] [3 7] [5 8] [2 4]]
+r = D * t
+v = S # S # S # r . [[0 6] [2 7] [4 8]]
