@@ -17,7 +17,7 @@ def Kernelize
 
 def Codegen
         : Pass<"cfdlang-codegen", "::mlir::ModuleOp"> {
-    let summary = "Turns cfdlang kernels into C99 code";
+    let summary = "Turns cfdlang kernels into linalg implementations";
     let constructor = "mlir::cfdlang::createCodegenPass()";
 }
 
