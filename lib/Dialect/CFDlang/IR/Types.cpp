@@ -37,6 +37,7 @@ void CFDlangDialect::registerTypes()
     >();
 }
 
+/*
 void CFDlangDialect::printType(Type type, DialectAsmPrinter &printer) const
 {
     if (failed(generatedTypePrinter(type, printer))) {
@@ -65,3 +66,4 @@ Type CFDlangDialect::parseType(DialectAsmParser &parser) const
     parser.emitError(parser.getNameLoc(), "unknown cfdlang type: ") << typeTag;
     return nullptr;
 }
+*/

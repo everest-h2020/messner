@@ -52,7 +52,7 @@ class CFDlang_Attr<string name, list<Trait> traits = []>
         : AttrDef<CFDlang_Dialect, name, traits>;
 */
 // Template for ops.
-class CFDlang_Op<string mnemonic, list<OpTrait> traits = []>
+class CFDlang_Op<string mnemonic, list<Trait> traits = []>
         : Op<CFDlang_Dialect, mnemonic, traits>;
 // Template for types.
 class CFDlang_Type<string name, list<Trait> traits = []>

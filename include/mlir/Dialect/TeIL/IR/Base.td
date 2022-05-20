@@ -50,7 +50,7 @@ def TeIL_Dialect : Dialect {
 class TeIL_Attr<string name, list<Trait> traits = []>
         : AttrDef<TeIL_Dialect, name, traits>;
 // Template for ops.
-class TeIL_Op<string mnemonic, list<OpTrait> traits = []>
+class TeIL_Op<string mnemonic, list<Trait> traits = []>
         : Op<TeIL_Dialect, mnemonic, traits>;
 // Template for types.
 class TeIL_Type<string name, list<Trait> traits = []>

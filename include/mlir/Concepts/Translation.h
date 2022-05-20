@@ -101,7 +101,7 @@ public:
         if (!name.isTriviallyEmpty()) {
             // Wrap the location in a NameLoc.
             result = NameLoc::get(
-                Identifier::get(name, getContext()),
+                StringAttr::get(getContext(), name),
                 result
             );
         }

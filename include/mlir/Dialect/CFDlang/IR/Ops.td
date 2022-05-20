@@ -119,7 +119,7 @@ def CFDlang_ProgramOp
 // Template for declarations.
 class CFDlang_DeclarationBase<
     string mnemonic,
-    list<OpTrait> traits = [],
+    list<Trait> traits = [],
     list<string> overrides = []
 >
         : CFDlang_Op<
@@ -216,7 +216,7 @@ def CFDlang_InputOp
 // Template for definitions.
 class CFDlang_DefinitionBase<
     string mnemonic,
-    list<OpTrait> traits = [],
+    list<Trait> traits = [],
     list<string> overrides = []
 >
         : CFDlang_DeclarationBase<
@@ -439,7 +439,7 @@ def CFDlang_EvalOp
 // Template for atom ops.
 class CFDlang_AtomOpBase<
     string mnemonic,
-    list<OpTrait> traits = [],
+    list<Trait> traits = [],
     list<string> overrides = []
 >
         : CFDlang_Op<
@@ -473,7 +473,7 @@ class CFDlang_AtomOpBase<
 // Template for arithmetic ops.
 class CFDlang_ArithmeticBase<
     string mnemonic,
-    list<OpTrait> traits = [],
+    list<Trait> traits = [],
     list<string> overrides = []
 >
         : CFDlang_AtomOpBase<

@@ -22,14 +22,14 @@ inline constexpr auto small_vector_capacity =
     llvm::CalculateSmallVectorDefaultInlinedElements<T>::value;
 
 /** Alternative to llvm::to_vector that uses the default capacity. */
-template<class Range>
-inline auto to_vector(Range &&range)
-{
-    using reference = decltype(*range.begin());
-    using value_type = std::remove_cv_t<std::remove_reference_t<reference>>;
-    constexpr auto capacity = small_vector_capacity<value_type>;
-    return llvm::to_vector<capacity>(std::forward<Range>(range));
-}
+// template<class Range>
+// inline auto to_vector(Range &&range)
+// {
+//     using reference = decltype(*range.begin());
+//     using value_type = std::remove_cv_t<std::remove_reference_t<reference>>;
+//     constexpr auto capacity = small_vector_capacity<value_type>;
+//     return llvm::to_vector<capacity>(std::forward<Range>(range));
+// }
 
 /** Asserts that @p result indicate success. */
 inline void cantFail(LogicalResult result)

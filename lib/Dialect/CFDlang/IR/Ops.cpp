@@ -152,9 +152,8 @@ OpFoldResult EvalOp::fold(ArrayRef<Attribute> operands)
 
 static void printAtomOp(OpAsmPrinter &p, Operation *op)
 {
-    p << op->getName() << " ";
-
     // operands `:`
+    p << ' ';
     p.printOperands(op->getOperands());
     p << " : ";
 
@@ -248,10 +247,8 @@ FailureOr<teil::AtomSize> ProductOp::reifyAtomSize(OpBuilder &builder)
 
 static void print(OpAsmPrinter &p, ContractOp op)
 {
-    p << op.getOperationName() << ' ';
-
     // $operand `:` custom<AtomType>($operand)
-    p << op.getOperand() << " : ";
+    p << ' ' << op.getOperand() << " : ";
     printAtomType(p, op, op.getOperand().getType());
 
     // `indices` custom<NatPairs>($indices)

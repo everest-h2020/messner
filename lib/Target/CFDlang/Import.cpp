@@ -32,7 +32,7 @@ static OwningOpRef<cfdlang::ProgramOp> importProgram(
     return driver.takeResult();
 }
 
-static OwningModuleRef importModule(
+static OwningOpRef<ModuleOp> importModule(
     llvm::SourceMgr &source,
     MLIRContext *context
 )
@@ -44,7 +44,7 @@ static OwningModuleRef importModule(
         auto module = builder.create<ModuleOp>(builder.getUnknownLoc());
         builder.setInsertionPointToStart(module.getBody());
         builder.insert(result.release());
-        return OwningModuleRef(module);
+        return OwningOpRef<ModuleOp>(module);
     }
 
     return {};

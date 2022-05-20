@@ -6,6 +6,8 @@
 namespace mlir::cfdlang {
 
 std::unique_ptr<OperationPass<ModuleOp>> createContractionFactorizationPass();
+std::unique_ptr<OperationPass<ModuleOp>> createKernelizePass();
+std::unique_ptr<OperationPass<ModuleOp>> createCodegenPass();
 
 } // namespace mlir::cfdlang
 

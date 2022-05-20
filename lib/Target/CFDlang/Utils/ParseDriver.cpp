@@ -213,7 +213,7 @@ AtomOp ParseDriver::eval(ImportRange location, StringRef id)
     return result().getBuilder().create<EvalOp>(
         getContext().getLocation(location.begin),
         declaration->getType(),
-        result().getBuilder().getSymbolRefAttr(id)
+        SymbolRefAttr::get(result().getBuilder().getContext(), id)
     );
 }
 

@@ -35,6 +35,7 @@ void TeILDialect::registerTypes()
     >();
 }
 
+/*
 void TeILDialect::printType(Type type, DialectAsmPrinter &printer) const
 {
     if (failed(generatedTypePrinter(type, printer))) {
@@ -63,3 +64,4 @@ Type TeILDialect::parseType(DialectAsmParser &parser) const
     parser.emitError(parser.getNameLoc(), "unknown teil type: ") << typeTag;
     return Type();
 }
+*/
