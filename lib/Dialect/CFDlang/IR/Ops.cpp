@@ -177,7 +177,7 @@ static ParseResult parseAtomOp(
 )
 {
     // operands `:`
-    SmallVector<OpAsmParser::OperandType> operands;
+    SmallVector<OpAsmParser::UnresolvedOperand> operands;
     if (p.parseOperandList(operands)) return failure();
     if (p.parseColon()) return failure();
 
@@ -211,9 +211,55 @@ static ParseResult parseAtomOp(
     return p.emitError(p.getNameLoc()) << "incompatible operand types";
 }
 
+void AddOp::print(OpAsmPrinter &p)
+{
+    printAtomOp(p, *this);
+}
+ParseResult AddOp::parse(OpAsmParser &p, OperationState &result)
+{
+    return parseAtomOp<AddOp>(p, result);
+}
+
+void SubOp::print(OpAsmPrinter &p)
+{
+    printAtomOp(p, *this);
+}
+ParseResult SubOp::parse(OpAsmParser &p, OperationState &result)
+{
+    return parseAtomOp<SubOp>(p, result);
+}
+
+void MulOp::print(OpAsmPrinter &p)
+{
+    printAtomOp(p, *this);
+}
+ParseResult MulOp::parse(OpAsmParser &p, OperationState &result)
+{
+    return parseAtomOp<MulOp>(p, result);
+}
+
+void DivOp::print(OpAsmPrinter &p)
+{
+    printAtomOp(p, *this);
+}
+ParseResult DivOp::parse(OpAsmParser &p, OperationState &result)
+{
+    return parseAtomOp<DivOp>(p, result);
+}
+
 //===----------------------------------------------------------------------===//
 // ProductOp
 //===----------------------------------------------------------------------===//
+
+void ProductOp::print(OpAsmPrinter &p)
+{
+    printAtomOp(p, *this);
+}
+
+ParseResult ProductOp::parse(OpAsmParser &p, OperationState &result)
+{
+    return parseAtomOp<ProductOp>(p, result);
+}
 
 LogicalResult ProductOp::inferAtomShape(
     MLIRContext*,
@@ -245,26 +291,26 @@ FailureOr<teil::AtomSize> ProductOp::reifyAtomSize(OpBuilder &builder)
 // ContractOp
 //===----------------------------------------------------------------------===//
 
-static void print(OpAsmPrinter &p, ContractOp op)
+void ContractOp::print(OpAsmPrinter &p)
 {
     // $operand `:` custom<AtomType>($operand)
-    p << ' ' << op.getOperand() << " : ";
-    printAtomType(p, op, op.getOperand().getType());
+    p << ' ' << getOperand() << " : ";
+    printAtomType(p, *this, getOperand().getType());
 
     // `indices` custom<NatPairs>($indices)
     p << " indices ";
-    auto indices = op.indicesAttr().getAsValueRange();
+    auto indices = indicesAttr().getAsValueRange();
     for (auto it = indices.begin(); it != indices.end(); ++it) {
         p << '[' << *it++ << ' ' << *it << ']';
     }
 
     // attr-dict
-    p.printOptionalAttrDict(op->getAttrs(), {"indices"});
+    p.printOptionalAttrDict((*this)->getAttrs(), {"indices"});
 }
-static ParseResult parseContractOp(OpAsmParser &p, OperationState &result)
+ParseResult ContractOp::parse(OpAsmParser &p, OperationState &result)
 {
     // $operand `:`
-    OpAsmParser::OperandType operand;
+    OpAsmParser::UnresolvedOperand operand;
     if (p.parseOperand(operand)) return failure();
     if (p.parseColon()) return failure();
 

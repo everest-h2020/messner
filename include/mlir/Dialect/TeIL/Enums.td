@@ -12,6 +12,7 @@
 #define TEIL_ENUMS
 
 include "mlir/IR/OpBase.td"
+include "mlir/IR/EnumAttr.td"
 
 def TeIL_Reduction_Add : I64EnumAttrCase<"Add", 0, "add">;
 def TeIL_Reduction_Mul : I64EnumAttrCase<"Mul", 1, "mul">;

@@ -462,8 +462,7 @@ class CFDlang_AtomOpBase<
     /*let assemblyFormat = [{
         operands : custom<AtomType>(type(operands)) attr-dict
     }];*/
-    let printer = [{ ::printAtomOp(p, *this); }];
-    let parser = [{ return ::parseAtomOp<$cppClass>(parser, result); }];
+    let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -556,8 +555,7 @@ def CFDlang_ContractOp
     /*let assemblyFormat = [{
         $operand : custom<AtomType>(type($operand)) indices custom<NatPairs>($indices) attr-dict
     }];*/
-    let printer = [{ ::print(p, *this); }];
-    let parser = [{ return ::parseContractOp(parser, result); }];
+    let hasCustomAssemblyFormat = 1;
 }
 
 #endif

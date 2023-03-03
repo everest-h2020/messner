@@ -9,7 +9,7 @@
 #include "mlir/Target/CFDlang/Export.h"
 #include "mlir/Target/CFDlang/Import.h"
 #include "mlir/InitAllTranslations.h"
-#include "mlir/Translation.h"
+#include "mlir/Tools/mlir-translate/MlirTranslateMain.h"
 
 using namespace mlir;
 

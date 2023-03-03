@@ -13,7 +13,7 @@
 #include "mlir/Target/CFDlang/Utils/PrintDriver.h"
 #include "mlir/Target/CFDlang/CLI.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/Translation.h"
+#include "mlir/Tools/mlir-translate/Translation.h"
 
 #include <algorithm>
 
@@ -29,7 +29,7 @@ static LogicalResult exportProgram(ProgramOp program, raw_ostream &output)
 
 static LogicalResult exportModule(ModuleOp module, raw_ostream &output)
 {
-    auto programs = module.body().getOps<ProgramOp>();
+    auto programs = module.getBody()->getOps<ProgramOp>();
 
     // Find the first program that we should export.
     auto filter = [](ProgramOp program) {

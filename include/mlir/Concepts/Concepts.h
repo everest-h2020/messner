@@ -210,7 +210,11 @@ struct ConstrainedAttribute : Concept<Attribute> {
     /** Determines whether @p attr matches this concept. */
     static inline bool classof(Attribute attr)
     {
-        return attr.getType().template isa<Type>() && Constraint::matches(attr);
+        if constexpr (is_derived_v<ArrayAttr, Attribute>) {
+            return Constraint::matches(attr);
+        } else {
+            return attr.getType().template isa<Type>() && Constraint::matches(attr);
+        }
     }
     /** Determines whether @p attr matches this concept. */
     template<

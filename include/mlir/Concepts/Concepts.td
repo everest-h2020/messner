@@ -46,6 +46,6 @@ class TypeAttrConstraint<Type type>
 // NOTE: TypeAttrBase does the same thing but with strings instead of tablegen
 //       type constraints.
 class ConstrainedTypeAttr<Type type>
-        : Confined<TypeAttr, [TypeAttrConstraint<type>]>;
+        : ConfinedAttr<TypeAttr, [TypeAttrConstraint<type>]>;
 
 #endif

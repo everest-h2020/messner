@@ -25,7 +25,6 @@ def CFDlang_Dialect : Dialect {
     }];
 
     let dependentDialects = [
-        "StandardOpsDialect",
         "tensor::TensorDialect",
         "teil::TeILDialect"
     ];

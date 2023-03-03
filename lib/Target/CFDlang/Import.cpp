@@ -11,7 +11,7 @@
 #include "mlir/Target/CFDlang/Utils/ParseDriver.h"
 #include "mlir/Target/CFDlang/CLI.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/Translation.h"
+#include "mlir/Tools/mlir-translate/Translation.h"
 #include "Tokenizer.h"
 
 using namespace mlir;

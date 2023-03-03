@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mlir/Dialect/CFDlang/IR/Ops.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 

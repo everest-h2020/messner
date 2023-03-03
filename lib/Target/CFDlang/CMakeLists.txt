@@ -46,7 +46,7 @@ add_mlir_translation_library(${PROJECT_NAME}
         Core
 
     LINK_LIBS PUBLIC
-        MLIRTranslation
+        MLIRTranslateLib
         CFDlangDialect
         TeILDialect
         REflex::libreflex

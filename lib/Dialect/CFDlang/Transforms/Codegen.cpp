@@ -1,16 +1,16 @@
-#include "llvm/Support/Debug.h"
+#include "PassDetail.h"
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/CFDlang/IR/Ops.h"
+#include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/CFDlang/Passes.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mlir/Dialect/StandardOps/Transforms/FuncConversions.h"
-#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "PassDetail.h"
+#include "llvm/Support/Debug.h"
 
 using namespace mlir;
 using namespace mlir::cfdlang;
@@ -23,16 +23,13 @@ class MulLowering : public OpConversionPattern<MulOp> {
 public:
     using OpConversionPattern<MulOp>::OpConversionPattern;
 
-    virtual LogicalResult match(MulOp op) const override {
-        return success();
-    }
+    virtual LogicalResult match(MulOp op) const override { return success(); }
 
     virtual void rewrite(
         MulOp op,
         OpAdaptor adaptor,
-        ConversionPatternRewriter &rewriter
-    ) const override final
-    {
+        ConversionPatternRewriter& rewriter
+    ) const override final {
         auto out_shape = op.result().cast<Atom>().getShape();
         auto out = rewriter.create<linalg::InitTensorOp>(
             op.getLoc(),
@@ -45,9 +42,18 @@ public:
         in.push_back(adaptor.rhs());
 
         SmallVector<AffineMap, 3> maps;
-        maps.push_back(AffineMap::getMultiDimIdentityMap(out_shape.size(), rewriter.getContext()));
-        maps.push_back(AffineMap::getMultiDimIdentityMap(out_shape.size(), rewriter.getContext()));
-        maps.push_back(AffineMap::getMultiDimIdentityMap(out_shape.size(), rewriter.getContext()));
+        maps.push_back(AffineMap::getMultiDimIdentityMap(
+            out_shape.size(),
+            rewriter.getContext()
+        ));
+        maps.push_back(AffineMap::getMultiDimIdentityMap(
+            out_shape.size(),
+            rewriter.getContext()
+        ));
+        maps.push_back(AffineMap::getMultiDimIdentityMap(
+            out_shape.size(),
+            rewriter.getContext()
+        ));
 
         SmallVector<llvm::StringRef, 4> iterators;
         for (unsigned i = 0; i < out_shape.size(); ++i) {
@@ -62,7 +68,8 @@ public:
             maps,
             iterators,
             [&](OpBuilder& builder, Location loc, ValueRange args) {
-                Value res = builder.create<arith::MulFOp>(loc, args[0], args[1]);
+                Value res =
+                    builder.create<arith::MulFOp>(loc, args[0], args[1]);
                 builder.create<linalg::YieldOp>(loc, res);
             }
         );
@@ -80,9 +87,8 @@ public:
     virtual void rewrite(
         ProductOp op,
         OpAdaptor adaptor,
-        ConversionPatternRewriter &rewriter
-    ) const override final
-    {
+        ConversionPatternRewriter& rewriter
+    ) const override final {
         auto out_shape = op.result().cast<Atom>().getShape();
         auto out = rewriter.create<linalg::InitTensorOp>(
             op.getLoc(),
@@ -102,9 +108,18 @@ public:
         for (unsigned i = 0; i < lhs_rank; ++i) {
             lhsMap.push_back(getAffineDimExpr(i, rewriter.getContext()));
         }
-        maps.push_back(AffineMap::get(out_shape.size(), 0, lhsMap, rewriter.getContext()));
-        maps.push_back(AffineMap::getMinorIdentityMap(out_shape.size(), rhs_rank, rewriter.getContext()));
-        maps.push_back(AffineMap::getMultiDimIdentityMap(out_shape.size(), rewriter.getContext()));
+        maps.push_back(
+            AffineMap::get(out_shape.size(), 0, lhsMap, rewriter.getContext())
+        );
+        maps.push_back(AffineMap::getMinorIdentityMap(
+            out_shape.size(),
+            rhs_rank,
+            rewriter.getContext()
+        ));
+        maps.push_back(AffineMap::getMultiDimIdentityMap(
+            out_shape.size(),
+            rewriter.getContext()
+        ));
 
         SmallVector<llvm::StringRef, 4> iterators;
         for (unsigned i = 0; i < out_shape.size(); ++i) {
@@ -119,7 +134,8 @@ public:
             maps,
             iterators,
             [&](OpBuilder& builder, Location loc, ValueRange args) {
-                Value res = builder.create<arith::MulFOp>(loc, args[0], args[1]);
+                Value res =
+                    builder.create<arith::MulFOp>(loc, args[0], args[1]);
                 builder.create<linalg::YieldOp>(loc, res);
             }
         );
@@ -137,9 +153,8 @@ public:
     virtual void rewrite(
         ContractOp op,
         OpAdaptor adaptor,
-        ConversionPatternRewriter &rewriter
-    ) const override final
-    {
+        ConversionPatternRewriter& rewriter
+    ) const override final {
         auto out_shape = op.result().cast<Atom>().getShape();
         auto init = rewriter.create<linalg::InitTensorOp>(
             op.getLoc(),
@@ -151,18 +166,17 @@ public:
             APFloat::getZero(APFloat::IEEEdouble()),
             rewriter.getF64Type()
         );
-        auto out = rewriter.create<linalg::FillOp>(
-            op.getLoc(),
-            zero,
-            init
-        ).result();
+        auto out =
+            rewriter.create<linalg::FillOp>(op.getLoc(), zero.getResult(), init.getResult()).result();
 
         auto indices = op.indicesAttr().getValues();
-        auto in_shape = adaptor.operand().getType().cast<ShapedType>().getShape();
+        auto in_shape =
+            adaptor.operand().getType().cast<ShapedType>().getShape();
 
         SmallVector<unsigned, 4> outDims;
         for (unsigned dim = 0; dim < in_shape.size(); ++dim) {
-            if (std::find(indices.begin(), indices.end(), dim+1) == indices.end()) {
+            if (std::find(indices.begin(), indices.end(), dim + 1) ==
+                indices.end()) {
                 outDims.push_back(dim);
             }
         }
@@ -178,7 +192,7 @@ public:
             ins[outDims[dim]] = here;
         }
 
-        for (auto it = indices.begin(); it != indices.end(); ++it,++dim) {
+        for (auto it = indices.begin(); it != indices.end(); ++it, ++dim) {
             iterators.push_back("reduction");
             auto here = getAffineDimExpr(dim, rewriter.getContext());
             ins[*it - 1] = here;
@@ -187,8 +201,18 @@ public:
         }
 
         SmallVector<AffineMap, 2> maps;
-        maps.push_back(AffineMap::get(out_shape.size() + indices.size() / 2, 0, ins, rewriter.getContext()));
-        maps.push_back(AffineMap::get(out_shape.size() + indices.size() / 2, 0, outs, rewriter.getContext()));
+        maps.push_back(AffineMap::get(
+            out_shape.size() + indices.size() / 2,
+            /*symbols=*/0,
+            ins,
+            rewriter.getContext()
+        ));
+        maps.push_back(AffineMap::get(
+            out_shape.size() + indices.size() / 2,
+            0,
+            outs,
+            rewriter.getContext()
+        ));
 
         rewriter.replaceOpWithNewOp<linalg::GenericOp>(
             op,
@@ -198,7 +222,8 @@ public:
             maps,
             iterators,
             [&](OpBuilder& builder, Location loc, ValueRange args) {
-                Value add = builder.create<arith::AddFOp>(loc, args[0], args[1]);
+                Value add =
+                    builder.create<arith::AddFOp>(loc, args[0], args[1]);
                 builder.create<linalg::YieldOp>(loc, add);
             }
         );
@@ -209,11 +234,14 @@ class CastRemoval : public OpRewritePattern<UnrealizedConversionCastOp> {
 public:
     using OpRewritePattern<UnrealizedConversionCastOp>::OpRewritePattern;
 
-    virtual LogicalResult matchAndRewrite(UnrealizedConversionCastOp op,
-        PatternRewriter &rewriter) const override {
+    virtual LogicalResult matchAndRewrite(
+        UnrealizedConversionCastOp op,
+        PatternRewriter& rewriter
+    ) const override {
         auto par1 = op.getOperand(0).getDefiningOp<bufferization::ToTensorOp>();
         if (!par1) return failure();
-        auto par2 = par1.getOperand().getDefiningOp<UnrealizedConversionCastOp>();
+        auto par2 =
+            par1.getOperand().getDefiningOp<UnrealizedConversionCastOp>();
         if (!par2) return failure();
 
         rewriter.replaceOpWithNewOp<bufferization::ToTensorOp>(
@@ -229,8 +257,10 @@ class AllocaCastRemoval : public OpRewritePattern<UnrealizedConversionCastOp> {
 public:
     using OpRewritePattern<UnrealizedConversionCastOp>::OpRewritePattern;
 
-    virtual LogicalResult matchAndRewrite(UnrealizedConversionCastOp op,
-        PatternRewriter &rewriter) const override {
+    virtual LogicalResult matchAndRewrite(
+        UnrealizedConversionCastOp op,
+        PatternRewriter& rewriter
+    ) const override {
         auto alloca = op.getOperand(0).getDefiningOp<memref::AllocaOp>();
         if (!alloca) return failure();
 
@@ -247,20 +277,26 @@ class CopyCastRemoval : public OpRewritePattern<memref::CopyOp> {
 public:
     using OpRewritePattern<memref::CopyOp>::OpRewritePattern;
 
-    virtual LogicalResult matchAndRewrite(memref::CopyOp op,
-        PatternRewriter &rewriter) const override {
+    virtual LogicalResult matchAndRewrite(
+        memref::CopyOp op,
+        PatternRewriter& rewriter
+    ) const override {
         auto tar = op.getTarget().getDefiningOp<UnrealizedConversionCastOp>();
         if (!tar) return failure();
         auto src = op.getSource().getDefiningOp<bufferization::ToMemrefOp>();
         if (!src) return failure();
-        auto src2 = src.getOperand().getDefiningOp<UnrealizedConversionCastOp>();
+        auto src2 =
+            src.getOperand().getDefiningOp<UnrealizedConversionCastOp>();
         if (!src2) return failure();
 
         rewriter.replaceOpWithNewOp<memref::CopyOp>(
             op,
             rewriter.create<bufferization::ToMemrefOp>(
                 src2.getLoc(),
-                MemRefType::get(op.getOperand(0).getType().cast<MemRefType>().getShape(), rewriter.getF64Type()),
+                MemRefType::get(
+                    op.getOperand(0).getType().cast<MemRefType>().getShape(),
+                    rewriter.getF64Type()
+                ),
                 src2.getOperand(0)
             ),
             tar.getOperand(0)
@@ -270,29 +306,38 @@ public:
     }
 };
 
-class CodegenPass
-        : public CodegenBase<CodegenPass> {
+class CodegenPass : public CodegenBase<CodegenPass> {
 public:
-    virtual void runOnOperation() override
-    {
+    virtual void runOnOperation() override {
         TypeConverter typeConverter;
 
-        typeConverter.addConversion(
-            [](Type type) -> Optional<Type> { return type; }
-        );
+        typeConverter.addConversion([](Type type) -> Optional<Type> {
+            return type;
+        });
         typeConverter.addConversion([](ScalarType type) -> Optional<Type> {
             return Float64Type::get(type.getContext());
         });
-        typeConverter.addConversion([&](RankedTensorType type) -> Optional<Type> {
-            return RankedTensorType::get(type.getShape(), typeConverter.convertType(type.getElementType()));
-        });
+        typeConverter.addConversion(
+            [&](RankedTensorType type) -> Optional<Type> {
+                return RankedTensorType::get(
+                    type.getShape(),
+                    typeConverter.convertType(type.getElementType())
+                );
+            }
+        );
         typeConverter.addConversion([&](MemRefType type) -> Optional<Type> {
-            return MemRefType::get(type.getShape(), typeConverter.convertType(type.getElementType()));
+            return MemRefType::get(
+                type.getShape(),
+                typeConverter.convertType(type.getElementType())
+            );
         });
 
-        auto addUnrealizedCast = [](OpBuilder &builder, Type type, ValueRange inputs,
-                              Location loc) {
-            auto cast = builder.create<UnrealizedConversionCastOp>(loc, type, inputs);
+        auto addUnrealizedCast = [](OpBuilder& builder,
+                                    Type type,
+                                    ValueRange inputs,
+                                    Location loc) {
+            auto cast =
+                builder.create<UnrealizedConversionCastOp>(loc, type, inputs);
             return Optional<Value>(cast.getResult(0));
         };
         typeConverter.addSourceMaterialization(addUnrealizedCast);
@@ -301,31 +346,43 @@ public:
         RewritePatternSet patterns(&getContext());
         ConversionTarget target(getContext());
 
-        populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(patterns, typeConverter);
-        target.addDynamicallyLegalOp<FuncOp>([&](FuncOp op) {
-            return typeConverter.isSignatureLegal(op.getType()) &&
-                    typeConverter.isLegal(&op.getBody());
+        populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(
+            patterns,
+            typeConverter
+        );
+        target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
+            return typeConverter.isSignatureLegal(op.getFunctionType()) &&
+                   typeConverter.isLegal(&op.getBody());
         });
 
         populateCallOpTypeConversionPattern(patterns, typeConverter);
-        target.addDynamicallyLegalOp<CallOp>(
-        [&](CallOp op) { return typeConverter.isLegal(op); });
+        target.addDynamicallyLegalOp<func::CallOp>([&](func::CallOp op) {
+            return typeConverter.isLegal(op);
+        });
 
         populateBranchOpInterfaceTypeConversionPattern(patterns, typeConverter);
         populateReturnOpTypeConversionPattern(patterns, typeConverter);
-        target.addDynamicallyLegalOp<ReturnOp>(
-        [&](ReturnOp op) { return typeConverter.isLegal(op); });
+        target.addDynamicallyLegalOp<func::ReturnOp>([&](func::ReturnOp op) {
+            return typeConverter.isLegal(op);
+        });
 
         populateReconcileUnrealizedCastsPatterns(patterns);
 
-        patterns.add<MulLowering, ProductLowering, ContractLowering>(typeConverter, &getContext());
+        patterns.add<MulLowering, ProductLowering, ContractLowering>(
+            typeConverter,
+            &getContext()
+        );
 
-        target
-            .addLegalDialect<memref::MemRefDialect, arith::ArithmeticDialect, bufferization::BufferizationDialect, linalg::LinalgDialect>();
+        target.addLegalDialect<
+            memref::MemRefDialect,
+            arith::ArithmeticDialect,
+            bufferization::BufferizationDialect,
+            linalg::LinalgDialect>();
         target.addLegalOp<ModuleOp>();
-        if (failed(applyFullConversion(getOperation(), target,
-                                        std::move(patterns))))
-        signalPassFailure();
+        if (failed(
+                applyFullConversion(getOperation(), target, std::move(patterns))
+            ))
+            signalPassFailure();
 
         RewritePatternSet patt2(&getContext());
         patt2.add<CastRemoval>(&getContext());
@@ -343,8 +400,9 @@ public:
     }
 };
 
-}
+} // namespace
 
-std::unique_ptr<OperationPass<ModuleOp>> mlir::cfdlang::createCodegenPass() {
+std::unique_ptr<OperationPass<ModuleOp>>
+mlir::cfdlang::createCodegenPass() {
     return std::make_unique<CodegenPass>();
 }

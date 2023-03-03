@@ -13,6 +13,9 @@ def Kernelize
         : Pass<"cfdlang-kernelize", "::mlir::ModuleOp"> {
     let summary = "Turns cfdlang programs into kernel functions";
     let constructor = "mlir::cfdlang::createKernelizePass()";
+    let dependentDialects = [
+        "mlir::func::FuncDialect"
+    ];
 }
 
 def Codegen

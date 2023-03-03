@@ -8,7 +8,7 @@
 #include "mlir/Dialect/TeIL/Concepts/AtomSize.h"
 
 #include "llvm/Support/Debug.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Dialect/TeIL/IR/Base.h"
 
 #define DEBUG_TYPE "teil-atom-size"

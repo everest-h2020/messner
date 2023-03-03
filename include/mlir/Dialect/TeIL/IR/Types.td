@@ -47,6 +47,7 @@ def TeIL_Number : TeIL_Type<"Number", [MemRefElementTypeInterface]> {
     ];
     let skipDefaultBuilders = 1;
 
+    let hasCustomAssemblyFormat = 1;
     code parser = [{
         natural_t equivalenceClass = 0;
         if (succeeded($_parser.parseOptionalLess())) {

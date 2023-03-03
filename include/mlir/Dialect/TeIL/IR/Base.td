@@ -26,7 +26,6 @@ def TeIL_Dialect : Dialect {
     }];
 
     let dependentDialects = [
-        "StandardOpsDialect",
         "tensor::TensorDialect"
     ];
 

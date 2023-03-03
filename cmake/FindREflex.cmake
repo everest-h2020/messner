@@ -240,7 +240,4 @@ macro(add_reflex_bison_dependency _reflex _bison)
     set_source_files_properties(${REflex_${_reflex}_OUTPUTS} PROPERTIES
         OBJECT_DEPENDS ${BISON_${_bison}_OUTPUT_HEADER}
     )
-    set_source_files_properties(${BISON_${_bison}_OUTPUT_HEADER} PROPERTIES
-        OBJECT_DEPENDS ${REflex_${_reflex}_OUTPUT_HEADER}
-    )
 endmacro()

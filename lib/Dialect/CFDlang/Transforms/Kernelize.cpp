@@ -1,4 +1,5 @@
 #include "llvm/Support/Debug.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/CFDlang/IR/Ops.h"
 #include "mlir/Dialect/CFDlang/Passes.h"
@@ -46,7 +47,7 @@ private:
         }
 
         OpBuilder builder(program);
-        auto kernelFn = builder.create<FuncOp>(
+        auto kernelFn = builder.create<func::FuncOp>(
             program.getLoc(),
             program.getName().getValueOr("kernel"),
             FunctionType::get(
@@ -70,7 +71,7 @@ private:
             materialize(builder, output, body->getArgument(idx++));
         }
 
-        builder.create<ReturnOp>(program.getLoc());
+        builder.create<func::ReturnOp>(program.getLoc());
 
         program->remove();
         program->destroy();
@@ -108,7 +109,7 @@ private:
         args.push_back(buffer);
 
         OpBuilder outer(builder.getInsertionBlock()->getParentOp());
-        auto nodeFn = outer.create<FuncOp>(
+        auto nodeFn = outer.create<func::FuncOp>(
             definition.getLoc(),
             Twine("node_").concat(definition.getName()).str(),
             FunctionType::get(
@@ -152,9 +153,9 @@ private:
             nodeBuilder.clone(op, mapping);
         }
 
-        nodeBuilder.create<ReturnOp>(definition.getLoc());
+        nodeBuilder.create<func::ReturnOp>(definition.getLoc());
 
-        builder.create<CallOp>(
+        builder.create<func::CallOp>(
             definition.getLoc(),
             nodeFn,
             args

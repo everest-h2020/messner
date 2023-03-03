@@ -20,7 +20,7 @@ target_link_libraries(${PROJECT_NAME}
         MLIRIR
         MLIRParser
         MLIRPass
-        MLIRTranslation
+        MLIRTranslateLib
         MLIRSupport
         ${dialect_libs}
         ${translation_libs}
