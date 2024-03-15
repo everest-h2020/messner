@@ -41,7 +41,7 @@ private:
         LLVM_DEBUG(llvm::dbgs() << "visit(" << op << ")\n");
 
         // First, match against the (L # R) . [indices] pattern.
-        auto prod = op.operand().getDefiningOp<ProductOp>();
+        auto prod = op.getOperand().getDefiningOp<ProductOp>();
         if (!prod) {
             // This candidate is discarded.
             return;
@@ -50,8 +50,8 @@ private:
         LLVM_DEBUG(llvm::dbgs() << "prod = " << prod << "\n");
 
         // Pattern is matched.
-        auto L = prod.lhs().cast<Atom>(), R = prod.rhs().cast<Atom>();
-        auto indices = op.indicesAttr().getAsValueRange();
+        auto L = prod.getLhs().cast<Atom>(), R = prod.getRhs().cast<Atom>();
+        auto indices = op.getIndicesAttr().getAsValueRange();
 
         // Prepare lists for the rerwite indices, splitting at pivot.
         SmallVector<natural_t> L_indices, R_indices, LR_indices;
@@ -125,7 +125,7 @@ private:
             // Add the new contraction to the work list.
             work.push_back(rewrite);
             // Update the left atom.
-            L = rewrite.result().cast<Atom>();
+            L = rewrite.getResult().cast<Atom>();
             changed = true;
         }
         if (!R_indices.empty()) {
@@ -138,7 +138,7 @@ private:
             // Add the new contraction to the work list.
             work.push_back(rewrite);
             // Update the left atom.
-            R = rewrite.result().cast<Atom>();
+            R = rewrite.getResult().cast<Atom>();
             changed = true;
         }
 

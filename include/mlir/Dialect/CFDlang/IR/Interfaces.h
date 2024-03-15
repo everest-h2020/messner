@@ -34,9 +34,10 @@ FailureOr<teil::AtomSize> reifyAtomSize(
 template<class ConcreteOp>
 inline AtomType inferAtomType(
     MLIRContext *context,
-    Optional<Location> location,
+    std::optional<Location> location,
     ValueRange operands,
     DictionaryAttr attributes,
+    OpaqueProperties properties,
     RegionRange regions
 )
 {
@@ -48,6 +49,7 @@ inline AtomType inferAtomType(
                 location,
                 operands,
                 attributes,
+                properties,
                 regions,
                 atomShape
             )
@@ -89,9 +91,10 @@ class CFDlang_AtomInference : public TraitBase<ConcreteType, CFDlang_AtomInferen
 
     static cfdlang::AtomType modelInferAtomType(
         MLIRContext *context,
-        Optional<Location> location,
+        std::optional<Location> location,
         ValueRange operands,
         DictionaryAttr attributes,
+        OpaqueProperties properties,
         RegionRange regions
     )
     {
@@ -100,6 +103,7 @@ class CFDlang_AtomInference : public TraitBase<ConcreteType, CFDlang_AtomInferen
             location,
             operands,
             attributes,
+            properties,
             regions
         );
     }
@@ -108,9 +112,10 @@ public:
     // InferTypeOpInterface
     static LogicalResult inferReturnTypes(
         MLIRContext *context,
-        Optional<Location> location,
+        std::optional<Location> location,
         ValueRange operands,
         DictionaryAttr attributes,
+        OpaqueProperties properties,
         RegionRange regions,
         SmallVectorImpl<Type> &inferredReturnTypes
     )
@@ -121,6 +126,7 @@ public:
                 location,
                 operands,
                 attributes,
+                properties,
                 regions
             )
         ) {
@@ -139,9 +145,10 @@ public:
     //       is how:
     // static LogicalResult inferReturnTypeComponents(
     //     MLIRContext *context,
-    //     Optional<Location> location,
+    //     std::optional<Location> location,
     //     ValueRange operands,
     //     DictionaryAttr attributes,
+    //     OpaqueProperties properties,
     //     RegionRange regions,
     //     SmallVectorImpl<ShapedTypeComponents> &inferredReturnShapes
     // )
@@ -152,6 +159,7 @@ public:
     //             location,
     //             operands,
     //             attributes,
+    //             properties,
     //             regions
     //         )
     //     ) {

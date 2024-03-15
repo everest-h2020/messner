@@ -27,7 +27,7 @@ enum class DeclarationKind {
 class Declaration {
 public:
     using Location      = ImportRange;
-    using Definition    = Optional<Location>;
+    using Definition    = std::optional<Location>;
 
     explicit            Declaration(
         StringRef id,
@@ -56,7 +56,7 @@ public:
     AtomType            getType() const { return m_type; }
 
     Definition          getDefinition() const { return m_definition; }
-    bool                isDefined() const { return m_definition.hasValue(); }
+    bool                isDefined() const { return m_definition.has_value(); }
     void                define(Location location) const
     {
         m_definition = location;

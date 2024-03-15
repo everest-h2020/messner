@@ -120,13 +120,13 @@ LogicalResult EvalOp::verifySymbolUses(SymbolTableCollection &symbolTable)
     // Find the matching declaration.
     auto declaration = symbolTable.lookupNearestSymbolFrom<DeclarationOp>(
         *this,
-        name()
+        getName()
     );
 
     // Check that the symbol was declared.
     if (!declaration) {
         return emitOpError()
-            << "'" << name() << "' does not reference a valid symbol";
+            << "'" << getName() << "' does not reference a valid symbol";
     }
 
     // Check that our use is consistent with the declared type.
@@ -134,16 +134,16 @@ LogicalResult EvalOp::verifySymbolUses(SymbolTableCollection &symbolTable)
         return emitOpError()
             << "result type " << getResult().getType()
             << " does not match declared type " << declaration.getAtomType()
-            << " of symbol @" << name();
+            << " of symbol @" << getName();
     }
 
     return success();
 }
 
-OpFoldResult EvalOp::fold(ArrayRef<Attribute> operands)
+OpFoldResult EvalOp::fold(EvalOp::FoldAdaptor)
 {
     // TODO: ???
-    return OpFoldResult(nameAttr());
+    return OpFoldResult(getNameAttr());
 }
 
 //===----------------------------------------------------------------------===//
@@ -202,6 +202,7 @@ static ParseResult parseAtomOp(
             result.location,
             result.operands,
             DictionaryAttr::get(p.getBuilder().getContext(), result.attributes),
+            nullptr,
             result.regions
         )
     ) {
@@ -263,9 +264,10 @@ ParseResult ProductOp::parse(OpAsmParser &p, OperationState &result)
 
 LogicalResult ProductOp::inferAtomShape(
     MLIRContext*,
-    Optional<Location>,
+    std::optional<Location>,
     ValueRange operands,
     DictionaryAttr,
+    OpaqueProperties,
     RegionRange,
     teil::ShapeBuilder &atomShape
 )
@@ -299,7 +301,7 @@ void ContractOp::print(OpAsmPrinter &p)
 
     // `indices` custom<NatPairs>($indices)
     p << " indices ";
-    auto indices = indicesAttr().getAsValueRange();
+    auto indices = getIndicesAttr().getAsValueRange();
     for (auto it = indices.begin(); it != indices.end(); ++it) {
         p << '[' << *it++ << ' ' << *it << ']';
     }
@@ -344,6 +346,7 @@ ParseResult ContractOp::parse(OpAsmParser &p, OperationState &result)
             result.location,
             result.operands,
             DictionaryAttr::get(p.getBuilder().getContext(), result.attributes),
+            nullptr,
             result.regions
         )
     ) {
@@ -355,9 +358,10 @@ ParseResult ContractOp::parse(OpAsmParser &p, OperationState &result)
 
 LogicalResult ContractOp::inferAtomShape(
     MLIRContext*,
-    Optional<Location>,
+    std::optional<Location>,
     ValueRange operands,
     DictionaryAttr attributes,
+    OpaqueProperties,
     RegionRange,
     teil::ShapeBuilder &atomShape
 )

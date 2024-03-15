@@ -40,6 +40,7 @@ struct AtomSize {
         value_type
     > {
         /*implicit*/ iterator() = default;
+        /*implicit*/ iterator(const iterator&) = default;
         explicit iterator(
             shape_t::iterator shape,
             ArrayRef<DimSize>::iterator values

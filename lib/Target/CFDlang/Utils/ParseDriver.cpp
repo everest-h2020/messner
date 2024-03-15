@@ -77,7 +77,7 @@ bool ParseDriver::stmt_begin(ImportRange location, StringRef id)
         warning(location,
             "redeclared atom '" + id + "'"
         );
-        note(declaration->getDefinition().getValue(),
+        note(declaration->getDefinition().value(),
             "previous definition was here"
         );
     }
@@ -90,13 +90,13 @@ bool ParseDriver::stmt_begin(ImportRange location, StringRef id)
         case DeclarationKind::Variable:
             body = &result().getBuilder()
                 .create<DefineOp>(loc, id, declaration->getType())
-                .body()
+                .getBody()
                 .front();
             break;
         case DeclarationKind::Output:
             body = &result().getBuilder()
                 .create<OutputOp>(loc, id, declaration->getType())
-                .body()
+                .getBody()
                 .front();
             break;
         default:
@@ -291,6 +291,7 @@ AtomOp ParseDriver::cont(
                 {},
                 {op.getAtom()},
                 result().getBuilder().getDictionaryAttr(attrs),
+                nullptr,
                 {},
                 shape
             )

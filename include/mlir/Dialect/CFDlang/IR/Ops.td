@@ -87,7 +87,7 @@ def CFDlang_ProgramOp
     let skipDefaultBuilders = 1;
 
     code extraClassDeclaration = [{
-    Optional<StringRef> getName() { return sym_name(); }
+    std::optional<StringRef> getName() { return getSymName(); }
 
     //===------------------------------------------------------------------===//
     // SymbolOpInterface
@@ -344,7 +344,7 @@ def CFDlang_OutputOp
 def CFDlang_YieldOp
         : CFDlang_Op<
             "yield",
-            [NoSideEffect, ReturnLike, Terminator]
+            [Pure, ReturnLike, Terminator]
         > {
     let summary = "Block terminator";
     let description = [{
@@ -373,7 +373,7 @@ def CFDlang_EvalOp
         : CFDlang_Op<
             "eval",
             [
-                NoSideEffect,
+                Pure,
                 ConstantLike,
                 DeclareOpInterfaceMethods<
                     SymbolUserOpInterface,
@@ -413,9 +413,10 @@ def CFDlang_EvalOp
 
     static LogicalResult inferAtomShape(
         MLIRContext*,
-        Optional<Location>,
+        std::optional<Location>,
         ValueRange operands,
         DictionaryAttr,
+        OpaqueProperties,
         RegionRange,
         teil::ShapeBuilder &atomShape
     )
@@ -445,7 +446,7 @@ class CFDlang_AtomOpBase<
         : CFDlang_Op<
             mnemonic,
             traits # [
-                NoSideEffect,
+                Pure,
                 DeclareOpInterfaceMethods<CFDlang_AtomOp, overrides>,
                 // The following native trait implements all the interfaces below.
                 NativeOpTrait<"CFDlang_AtomInference">,
@@ -494,9 +495,10 @@ class CFDlang_ArithmeticBase<
 
     static LogicalResult inferAtomShape(
         MLIRContext*,
-        Optional<Location>,
+        std::optional<Location>,
         ValueRange operands,
         DictionaryAttr,
+        OpaqueProperties,
         RegionRange,
         teil::ShapeBuilder &atomShape
     )

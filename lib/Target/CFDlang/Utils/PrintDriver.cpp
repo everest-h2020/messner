@@ -18,11 +18,11 @@ void PrintDriver::print(ProgramOp op)
 {
     // Print a header.
     m_out << "// MLIR cfdlang dialect export of program ";
-    m_out << op.getName().getValueOr("<unnamed>");
+    m_out << op.getName().value_or("<unnamed>");
     m_out << "\n";
 
     // Declare all symbols.
-    auto decls = op.getBody()->getOps<DeclarationOp>();
+    auto decls = op.getBody().getOps<DeclarationOp>();
     for (auto decl : decls) {
         declare(decl);
     }
@@ -31,7 +31,7 @@ void PrintDriver::print(ProgramOp op)
     m_out << "\n";
 
     // Emit the code.
-    auto defs = op.getBody()->getOps<DefinitionOp>();
+    auto defs = op.getBody().getOps<DefinitionOp>();
     for (auto def : defs) {
         print(def);
     }
@@ -121,7 +121,7 @@ void PrintDriver::print(AtomOp op)
 
 void PrintDriver::print(EvalOp op)
 {
-    auto sym = m_symbols.lookup(op.name().getLeafReference());
+    auto sym = m_symbols.lookup(op.getName().getLeafReference());
     assert(sym);
     m_out << sym->getId();
 }
@@ -129,9 +129,9 @@ void PrintDriver::print(EvalOp op)
 void PrintDriver::print(ContractOp op)
 {
     beginExpr(-1);
-    print(op.operand().getDefiningOp<AtomOp>());
+    print(op.getOperand().getDefiningOp<AtomOp>());
     m_out << " . [";
-    auto indices = op.indicesAttr().getAsValueRange();
+    auto indices = op.getIndicesAttr().getAsValueRange();
     for (auto it = indices.begin(); it != indices.end(); ++it) {
         m_out << '[' << *it++ - 1 << ' ' << *it - 1 << ']';
     }

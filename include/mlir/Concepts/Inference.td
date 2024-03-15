@@ -17,13 +17,14 @@ include "mlir/IR/OpBase.td"
 def InferenceMethod {
     dag arguments = (ins
         "::mlir::MLIRContext*":$context,
-        "::llvm::Optional<::mlir::Location>":$location,
+        "::std::optional<::mlir::Location>":$location,
         "::mlir::ValueRange":$operands,
         "::mlir::DictionaryAttr":$attributes,
+        "::mlir::OpaqueProperties":$properties,
         "::mlir::RegionRange":$regions
     );
     code forwardArguments = [{
-        context, location, operands, attributes, regions
+        context, location, operands, attributes, properties, regions
     }];
 }
 

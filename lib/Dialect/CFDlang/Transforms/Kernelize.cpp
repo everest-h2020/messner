@@ -4,7 +4,7 @@
 #include "mlir/Dialect/CFDlang/IR/Ops.h"
 #include "mlir/Dialect/CFDlang/Passes.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/IRMapping.h"
 #include "PassDetail.h"
 
 using namespace mlir;
@@ -49,7 +49,7 @@ private:
         OpBuilder builder(program);
         auto kernelFn = builder.create<func::FuncOp>(
             program.getLoc(),
-            program.getName().getValueOr("kernel"),
+            program.getName().value_or("kernel"),
             FunctionType::get(
                 program.getContext(),
                 argTypes,
@@ -103,7 +103,7 @@ private:
 
         for (auto eval : definition->getRegion(0).getOps<EvalOp>()) {
             argTypes.push_back(bufferType(eval.getResult().getType().cast<AtomType>()));
-            args.push_back(getOrMaterialize(builder, eval.name().getLeafReference()));
+            args.push_back(getOrMaterialize(builder, eval.getName().getLeafReference()));
         }
         argTypes.push_back(buffer.getType());
         args.push_back(buffer);
@@ -124,7 +124,7 @@ private:
         auto nodeBody = nodeFn.addEntryBlock();
         nodeBuilder.setInsertionPointToStart(nodeBody);
 
-        BlockAndValueMapping mapping;
+        IRMapping mapping;
         unsigned idx = 0;
         for (auto& op : *(definition->getRegion(0).begin())) {
             if (auto eval = dyn_cast<EvalOp>(op)) {
@@ -140,7 +140,7 @@ private:
             if (auto yield = dyn_cast<YieldOp>(op)) {
                 auto memref = nodeBuilder.create<bufferization::ToMemrefOp>(
                     yield.getLoc(),
-                    bufferType(yield.atom().cast<Atom>().getType()),
+                    bufferType(yield.getAtom().cast<Atom>().getType()),
                     mapping.lookup(yield.getOperand())
                 );
                 nodeBuilder.create<memref::CopyOp>(

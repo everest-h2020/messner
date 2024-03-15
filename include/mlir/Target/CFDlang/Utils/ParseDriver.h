@@ -54,7 +54,7 @@ public:
             );
 
         // Set the builder's insertion point.
-        m_builder.setInsertionPointToStart(&m_program->body().front());
+        m_builder.setInsertionPointToStart(&m_program->getBody().front());
     }
 
     ImportContext&  getContext() const { return m_context; }
@@ -88,7 +88,7 @@ public:
 
     bool            hasResult() const
     {
-        return m_state.hasValue() && m_state->hasResult();
+        return m_state.has_value() && m_state->hasResult();
     }
     ParseResult     takeResult()
     {
@@ -145,7 +145,7 @@ private:
     );
 
 private:
-    using State     = Optional<ProgramBuilder>;
+    using State     = std::optional<ProgramBuilder>;
     ImportContext   &m_context;
     Tokenizer*      m_tokenizer;
     State           m_state;

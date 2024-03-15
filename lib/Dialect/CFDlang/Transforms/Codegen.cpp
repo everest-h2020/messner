@@ -1,13 +1,13 @@
 #include "PassDetail.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/CFDlang/IR/Ops.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/CFDlang/Passes.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/Debug.h"
@@ -30,16 +30,16 @@ public:
         OpAdaptor adaptor,
         ConversionPatternRewriter& rewriter
     ) const override final {
-        auto out_shape = op.result().cast<Atom>().getShape();
-        auto out = rewriter.create<linalg::InitTensorOp>(
+        auto out_shape = op.getResult().cast<Atom>().getShape();
+        auto out = rewriter.create<tensor::EmptyOp>(
             op.getLoc(),
             out_shape,
             rewriter.getF64Type()
         );
 
         SmallVector<Value, 2> in;
-        in.push_back(adaptor.lhs());
-        in.push_back(adaptor.rhs());
+        in.push_back(adaptor.getLhs());
+        in.push_back(adaptor.getRhs());
 
         SmallVector<AffineMap, 3> maps;
         maps.push_back(AffineMap::getMultiDimIdentityMap(
@@ -55,10 +55,7 @@ public:
             rewriter.getContext()
         ));
 
-        SmallVector<llvm::StringRef, 4> iterators;
-        for (unsigned i = 0; i < out_shape.size(); ++i) {
-            iterators.push_back("parallel");
-        }
+        SmallVector<utils::IteratorType, 4> iterators(out_shape.size(), utils::IteratorType::parallel);
 
         rewriter.replaceOpWithNewOp<linalg::GenericOp>(
             op,
@@ -89,19 +86,19 @@ public:
         OpAdaptor adaptor,
         ConversionPatternRewriter& rewriter
     ) const override final {
-        auto out_shape = op.result().cast<Atom>().getShape();
-        auto out = rewriter.create<linalg::InitTensorOp>(
+        auto out_shape = op.getResult().cast<Atom>().getShape();
+        auto out = rewriter.create<tensor::EmptyOp>(
             op.getLoc(),
             out_shape,
             rewriter.getF64Type()
         );
 
-        auto lhs_rank = adaptor.lhs().getType().cast<ShapedType>().getRank();
-        auto rhs_rank = adaptor.rhs().getType().cast<ShapedType>().getRank();
+        auto lhs_rank = adaptor.getLhs().getType().cast<ShapedType>().getRank();
+        auto rhs_rank = adaptor.getRhs().getType().cast<ShapedType>().getRank();
 
         SmallVector<Value, 2> in;
-        in.push_back(adaptor.lhs());
-        in.push_back(adaptor.rhs());
+        in.push_back(adaptor.getLhs());
+        in.push_back(adaptor.getRhs());
 
         SmallVector<AffineMap, 3> maps;
         SmallVector<AffineExpr, 4> lhsMap;
@@ -121,10 +118,7 @@ public:
             rewriter.getContext()
         ));
 
-        SmallVector<llvm::StringRef, 4> iterators;
-        for (unsigned i = 0; i < out_shape.size(); ++i) {
-            iterators.push_back("parallel");
-        }
+        SmallVector<utils::IteratorType, 4> iterators(out_shape.size(), utils::IteratorType::parallel);
 
         rewriter.replaceOpWithNewOp<linalg::GenericOp>(
             op,
@@ -155,8 +149,8 @@ public:
         OpAdaptor adaptor,
         ConversionPatternRewriter& rewriter
     ) const override final {
-        auto out_shape = op.result().cast<Atom>().getShape();
-        auto init = rewriter.create<linalg::InitTensorOp>(
+        auto out_shape = op.getResult().cast<Atom>().getShape();
+        auto init = rewriter.create<tensor::EmptyOp>(
             op.getLoc(),
             out_shape,
             rewriter.getF64Type()
@@ -169,9 +163,9 @@ public:
         auto out =
             rewriter.create<linalg::FillOp>(op.getLoc(), zero.getResult(), init.getResult()).result();
 
-        auto indices = op.indicesAttr().getValues();
+        auto indices = op.getIndicesAttr().getValues();
         auto in_shape =
-            adaptor.operand().getType().cast<ShapedType>().getShape();
+            adaptor.getOperand().getType().cast<ShapedType>().getShape();
 
         SmallVector<unsigned, 4> outDims;
         for (unsigned dim = 0; dim < in_shape.size(); ++dim) {
@@ -183,17 +177,17 @@ public:
 
         SmallVector<AffineExpr, 4> ins, outs;
         ins.resize(in_shape.size());
-        SmallVector<llvm::StringRef, 4> iterators;
+        SmallVector<utils::IteratorType, 4> iterators;
         unsigned dim = 0;
         for (; dim < out_shape.size(); ++dim) {
-            iterators.push_back("parallel");
+            iterators.push_back(utils::IteratorType::parallel);
             auto here = getAffineDimExpr(dim, rewriter.getContext());
             outs.push_back(here);
             ins[outDims[dim]] = here;
         }
 
         for (auto it = indices.begin(); it != indices.end(); ++it, ++dim) {
-            iterators.push_back("reduction");
+            iterators.push_back(utils::IteratorType::reduction);
             auto here = getAffineDimExpr(dim, rewriter.getContext());
             ins[*it - 1] = here;
             ++it;
@@ -217,7 +211,7 @@ public:
         rewriter.replaceOpWithNewOp<linalg::GenericOp>(
             op,
             (Type)RankedTensorType::get(out_shape, rewriter.getF64Type()),
-            (Value)adaptor.operand(),
+            (Value)adaptor.getOperand(),
             out,
             maps,
             iterators,
@@ -311,21 +305,21 @@ public:
     virtual void runOnOperation() override {
         TypeConverter typeConverter;
 
-        typeConverter.addConversion([](Type type) -> Optional<Type> {
+        typeConverter.addConversion([](Type type) -> std::optional<Type> {
             return type;
         });
-        typeConverter.addConversion([](ScalarType type) -> Optional<Type> {
+        typeConverter.addConversion([](ScalarType type) -> std::optional<Type> {
             return Float64Type::get(type.getContext());
         });
         typeConverter.addConversion(
-            [&](RankedTensorType type) -> Optional<Type> {
+            [&](RankedTensorType type) -> std::optional<Type> {
                 return RankedTensorType::get(
                     type.getShape(),
                     typeConverter.convertType(type.getElementType())
                 );
             }
         );
-        typeConverter.addConversion([&](MemRefType type) -> Optional<Type> {
+        typeConverter.addConversion([&](MemRefType type) -> std::optional<Type> {
             return MemRefType::get(
                 type.getShape(),
                 typeConverter.convertType(type.getElementType())
@@ -338,7 +332,7 @@ public:
                                     Location loc) {
             auto cast =
                 builder.create<UnrealizedConversionCastOp>(loc, type, inputs);
-            return Optional<Value>(cast.getResult(0));
+            return std::optional<Value>(cast.getResult(0));
         };
         typeConverter.addSourceMaterialization(addUnrealizedCast);
         typeConverter.addTargetMaterialization(addUnrealizedCast);
@@ -375,7 +369,7 @@ public:
 
         target.addLegalDialect<
             memref::MemRefDialect,
-            arith::ArithmeticDialect,
+            arith::ArithDialect,
             bufferization::BufferizationDialect,
             linalg::LinalgDialect>();
         target.addLegalOp<ModuleOp>();
@@ -389,13 +383,14 @@ public:
         patt2.add<CopyCastRemoval>(&getContext());
         patt2.add<AllocaCastRemoval>(&getContext());
 
-        applyPatternsAndFoldGreedily(getOperation(), std::move(patt2));
+        if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patt2))))
+            signalPassFailure();
     }
 
     virtual void getDependentDialects(DialectRegistry& registry) const override {
         registry.insert<memref::MemRefDialect>();
         registry.insert<bufferization::BufferizationDialect>();
-        registry.insert<arith::ArithmeticDialect>();
+        registry.insert<arith::ArithDialect>();
         registry.insert<linalg::LinalgDialect>();
     }
 };

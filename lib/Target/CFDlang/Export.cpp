@@ -34,7 +34,7 @@ static LogicalResult exportModule(ModuleOp module, raw_ostream &output)
     // Find the first program that we should export.
     auto filter = [](ProgramOp program) {
         return translated_program_name.empty()
-            || program.getName().getValueOr("").equals(translated_program_name);
+            || program.getName().value_or("").equals(translated_program_name);
     };
     auto first = std::find_if(programs.begin(), programs.end(), filter);
 
@@ -73,6 +73,7 @@ void mlir::cfdlang::registerExport()
 {
     TranslateFromMLIRRegistration registration(
         "export-cfdlang",
+        "Converts the MLIR CFDlang dialect into CFDlang source",
         [](ModuleOp module, raw_ostream &output) {
             return exportModule(module, output);
         },

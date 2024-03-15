@@ -34,6 +34,8 @@ struct ImportLocation {
     /*implicit*/    ImportLocation() = default;
     /*implicit*/    ImportLocation(const ImportLocation&) = default;
 
+    ImportLocation &operator=(const ImportLocation&) = default;
+
     llvm::SMLoc     asSMLoc() const { return location; }
     /*implicit*/    operator llvm::SMLoc() const { return asSMLoc(); }
 
@@ -54,6 +56,8 @@ struct ImportRange {
     /*implicit*/    ImportRange(ImportLocation at)
     : ImportRange(at, at)
     {}
+
+    ImportRange &operator=(const ImportRange&) = default;
 
     llvm::SMRange   asSMRange() const { return {begin, end}; }
     /*implicit*/    operator llvm::SMRange() const { return asSMRange(); }
@@ -205,7 +209,7 @@ private:
             location.begin,
             kind,
             message,
-            llvm::makeArrayRef(location.asSMRange())
+            llvm::ArrayRef(location.asSMRange())
         );
     }
 

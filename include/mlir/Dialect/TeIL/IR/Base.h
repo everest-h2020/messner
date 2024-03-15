@@ -61,7 +61,7 @@ using natural_t = std::uint64_t;
  * @note    Dynamic dimension sizes are indicated using the reserved value
  *          ShapedType::kDynamicSize, which requires a signed integer type.
  */
-using dim_size_t = std::decay_t<decltype(ShapedType::kDynamicSize)>;
+using dim_size_t = std::decay_t<decltype(ShapedType::kDynamic)>;
 /** Type that represents an atom shape.
  *
  * @warning Commonly used throughout MLIR, shapes are passed as non-owning
@@ -86,7 +86,7 @@ using rank_t = shape_t::size_type;
 //
 
 /** Value that indicates the size of a dimension is determined at runtime. */
-inline constexpr dim_size_t dynamic_size = ShapedType::kDynamicSize;
+inline constexpr dim_size_t dynamic_size = ShapedType::kDynamic;
 /** Constant representing the shape of a scalar value. */
 inline constexpr shape_t scalar_shape{};
 /** Constant representing the rank of a scalar value. */

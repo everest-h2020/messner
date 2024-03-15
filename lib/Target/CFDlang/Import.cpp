@@ -54,6 +54,7 @@ void mlir::cfdlang::registerImport()
 {
     TranslateToMLIRRegistration registration(
         "import-cfdlang",
+        "Converts CFDlang source into the MLIR cfdlang dialect",
         [](llvm::SourceMgr &sourceMgr, MLIRContext *context) {
             // Load dialects.
             context->loadDialect<CFDlangDialect>();

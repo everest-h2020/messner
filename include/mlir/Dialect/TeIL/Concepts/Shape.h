@@ -8,7 +8,6 @@
 #pragma once
 
 #include "llvm/ADT/iterator.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Concepts/Fluent.h"
 #include "mlir/Dialect/TeIL/IR/Base.h"
@@ -55,11 +54,11 @@ inline std::size_t countDynamicDims(ShapeRange &&shape)
  * @param   [in]        shape   The shape.
  *
  * @retval  0           @p shape is trivially empty.
- * @retval  None        @p shape has a too large or dynamic extent.
+ * @retval  nullopt     @p shape has a too large or dynamic extent.
  * @retval  size_t      The static extent of @p shape .
  */
 template<class ShapeRange>
-inline Optional<std::size_t> calculateSmallExtent(ShapeRange &&shape)
+inline std::optional<std::size_t> calculateSmallExtent(ShapeRange &&shape)
 {
     std::size_t result{0};
     for (auto it = shape.begin(); it != shape.end(); ++it) {
@@ -83,12 +82,12 @@ inline Optional<std::size_t> calculateSmallExtent(ShapeRange &&shape)
             }
 
             // shape has a dynamic extent.
-            return None;
+            return std::nullopt;
         }
 
         if (__builtin_mul_overflow(result, static_cast<size_t>(*it), &result)) {
             // Calculating the extent has overflowed.
-            return None;
+            return std::nullopt;
         }
     }
 
@@ -250,7 +249,7 @@ struct ShapeType : ConstrainedType<RankedTensorType, ShapeType> {
     {
         auto shape = static_cast<int64_t>(rank);
         return RankedTensorType::get(
-            llvm::makeArrayRef(shape),
+            llvm::ArrayRef(shape),
             DimSizeType::get(context)
         ).cast<ShapeType>();
     }
