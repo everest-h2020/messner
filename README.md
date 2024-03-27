@@ -34,7 +34,7 @@ The following CMake variables can be configured:
 
 ## License
 
-TODO: Add license.
+This project is licensed under the ISC license.
 
 ---
 
