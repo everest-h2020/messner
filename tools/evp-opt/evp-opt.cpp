@@ -3,6 +3,7 @@
 /// @file
 /// @author      Karl F. A. Friebel (karl.friebel@tu-dresden.de)
 
+#include "messner/Dialect/EKL/IR/EKL.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/InitAllDialects.h"
@@ -21,12 +22,15 @@ using namespace mlir;
 
 int main(int argc, char *argv[])
 {
-    registerAllPasses();
-
     DialectRegistry registry;
 
-    // TODO: Register dialects.
-    // registerAllDialects(registry);
+#ifndef NDEBUG
+    registerAllDialects(registry);
+    registerAllPasses();
+#endif
+    // TODO: Register dialects and passes.
+    registry.insert<ekl::EKLDialect>();
+    ekl::registerEKLPasses();
 
     return asMainReturnCode(
         MlirOptMain(argc, argv, "messner optimizer driver\n", registry));

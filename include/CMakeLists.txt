@@ -12,3 +12,5 @@ configure_file(
     ${CMAKE_BINARY_DIR}/include/git.inc
     @ONLY
 )
+
+add_subdirectory(messner)
