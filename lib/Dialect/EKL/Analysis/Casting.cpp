@@ -129,7 +129,12 @@ BroadcastResult mlir::ekl::broadcast(MutableArrayRef<Type> types)
             continue;
         }
 
-        type = ArrayType::get(llvm::cast<ScalarType>(type), extents);
+        if (const auto scalarTy = llvm::dyn_cast<ScalarType>(type)) {
+            type = ArrayType::get(scalarTy, extents);
+            continue;
+        }
+
+        return BroadcastResult::Failure;
     }
 
     return BroadcastResult::Success;

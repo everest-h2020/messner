@@ -258,6 +258,62 @@ def EKL_DefineOp : EKL_Op<
     }];
 }
 
+def EKL_ConstexprOp : EKL_Op<
+        "constexpr",
+        [
+            Pure,
+            IsolatedFromAbove,
+            NoRegionArguments,
+            SingleBlockImplicitTerminator<"ekl::YieldOp">,
+            DeclareOpInterfaceMethods<EKL_ExpressionOp>,
+            OpAsmOpInterface]> {
+    let summary = "Establishes a context for constant expression evaluation";
+    let description = [{
+        The `ekl.constexpr` operation is used by the parser to create a scope
+        in which constant expression evaluation can be performed. Since the
+        expression body is `IsolatedFromAbove`, only other constant expressions
+        can be used in it.
+
+        Example:
+
+        ```
+        ekl.constexpr {
+            %0 = literal 16 : ui16
+            %1 = literal -3449 : si32
+            %2 = op_add %0: ui16, %1: si32
+            yield %2
+        }
+        ```
+    }];
+
+    let arguments = (ins);
+    let results = (outs EKL_ExpressionType:$result);
+    let regions = (region SizedRegion<1>:$expression);
+    let builders = [
+        OpBuilder<(ins CArg<"Type", "{}">:$resultBound), [{
+            $_state.addRegion()->emplaceBlock();
+            $_state.addTypes({ExpressionType::get($_builder.getContext(), resultBound)});
+        }]>];
+    let skipDefaultBuilders = 1;
+
+    let hasRegionVerifier = 1;
+    let hasFolder = 1;
+
+    let assemblyFormat = [{
+        attr-dict-with-keyword $expression custom<ExprResult>(type($result))
+    }];
+
+    code extraClassDeclaration = [{
+        //===--------------------------------------------------------------===//
+        // OpAsmOpInterface
+        //===--------------------------------------------------------------===//
+
+        static StringRef getDefaultDialect() {
+            return EKLDialect::getDialectNamespace();
+        }
+    }];
+}
+
 //===----------------------------------------------------------------------===//
 // Symbols
 //===----------------------------------------------------------------------===//
@@ -485,8 +541,6 @@ def EKL_IfOp : EKL_ExpressionBase<
     }];
 }
 
-// TODO: PanicOp
-
 //===----------------------------------------------------------------------===//
 // Casts
 //===----------------------------------------------------------------------===//
@@ -678,8 +732,8 @@ def EKL_YieldOp : EKL_Op<
 
     let arguments = (ins Optional<EKL_ExpressionType>:$value);
     let builders = [
-        OpBuilder<(ins "Value":$value), [{
-            $_state.addOperands({value});
+        OpBuilder<(ins CArg<"Value", "{}">:$value), [{
+            if (value) $_state.addOperands({value});
         }]>];
     let skipDefaultBuilders = 1;
 

@@ -171,6 +171,11 @@ public:
     // Error handling
     //===------------------------------------------------------------------===//
 
+    [[nodiscard]] bool hasWarnings() const { return m_hasWarnings; }
+
+    void emitWarning(const llvm::Twine &msg);
+    void emitWarning(ImportLocation where, const llvm::Twine &msg);
+
     [[nodiscard]] unsigned getNumErrors() const { return m_numErrors; }
 
     void emitError(const llvm::Twine &msg);
@@ -357,6 +362,7 @@ private:
     std::shared_ptr<llvm::SourceMgr> m_sourceMgr;
     StringAttr m_filename;
     StringRef m_source;
+    bool m_hasWarnings;
     unsigned m_numErrors;
     OpBuilder m_builder;
     OwningOpRef<ProgramOp> m_result;

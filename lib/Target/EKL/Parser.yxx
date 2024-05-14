@@ -310,6 +310,8 @@ literal                     : BOOL   { $$ = driver.getLiteral($1); }
 
 expr                        : expr-0
                             | if-expr
+                            | "in" expr-0[reference]
+                              { $$ = {driver.expr<ReadOp>(@1, $reference), @$}; }
                             ;
 
 expr-list-0                 : expr-list-1

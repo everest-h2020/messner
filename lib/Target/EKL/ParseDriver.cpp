@@ -35,6 +35,7 @@ ParseDriver::ParseDriver(
         : m_sourceMgr(std::move(sourceMgr)),
           m_filename(),
           m_source(),
+          m_hasWarnings(),
           m_numErrors(0U),
           m_builder(context),
           m_result(),
@@ -89,6 +90,8 @@ OwningOpRef<ProgramOp> ParseDriver::takeResult()
         m_result.release();
     }
 
+    if (hasWarnings()) emitWarning("parsing completed with warnings");
+
     m_scopes.clear();
     return std::move(m_result);
 }
@@ -111,6 +114,35 @@ Location ParseDriver::getLocation(ImportLocation loc) const
         .toLocation();
 }
 
+template<llvm::SourceMgr::DiagKind Kind>
+static void
+emit(llvm::SourceMgr &sourceMgr, ImportLocation where, const llvm::Twine &msg)
+{
+    // Do not indicate a source range if just a single character is referenced.
+    // NOTE: May not actually be needed.
+    ArrayRef<llvm::SMRange> ranges = {where};
+    if (where.begin == where.end) ranges = {};
+
+    // Print a bold error message with the red "error:" label, prefixed by the
+    // location, and followed by an excerpt from the source file.
+    sourceMgr.PrintMessage(where.begin, Kind, msg, ranges);
+}
+
+void ParseDriver::emitWarning(const llvm::Twine &msg)
+{
+    m_hasWarnings = true;
+
+    llvm::WithColor(llvm::WithColor::warning(), raw_ostream::SAVEDCOLOR, true)
+        << msg << "\n";
+}
+
+void ParseDriver::emitWarning(ImportLocation where, const llvm::Twine &msg)
+{
+    m_hasWarnings = true;
+
+    emit<llvm::SourceMgr::DiagKind::DK_Warning>(getSourceMgr(), where, msg);
+}
+
 void ParseDriver::emitError(const llvm::Twine &msg)
 {
     // Print a bold error message with the red "error:" label.
@@ -120,18 +152,7 @@ void ParseDriver::emitError(const llvm::Twine &msg)
 
 void ParseDriver::emitError(ImportLocation where, const llvm::Twine &msg)
 {
-    // Do not indicate a source range if just a single character is referenced.
-    // NOTE: May not actually be needed.
-    ArrayRef<llvm::SMRange> ranges = {where};
-    if (where.begin == where.end) ranges = {};
-
-    // Print a bold error message with the red "error:" label, prefixed by the
-    // location, and followed by an excerpt from the source file.
-    getSourceMgr().PrintMessage(
-        where.begin,
-        llvm::SourceMgr::DiagKind::DK_Error,
-        msg,
-        ranges);
+    emit<llvm::SourceMgr::DiagKind::DK_Error>(getSourceMgr(), where, msg);
 }
 
 LogicalResult ParseDriver::recoverFromError()
@@ -159,6 +180,13 @@ ParseDriver::parseIndex(Token token, extent_t &value)
     return std::nullopt;
 }
 
+[[nodiscard]] static bool isInexact(APFloat::opStatus status)
+{
+    using int_t         = std::underlying_type_t<APFloat::opStatus>;
+    constexpr auto mask = static_cast<int_t>(APFloat::opStatus::opInexact);
+    return (static_cast<int_t>(status) & mask) == mask;
+}
+
 std::optional<LogicalResult>
 ParseDriver::parseDecimal(Token token, Number &value)
 {
@@ -171,6 +199,9 @@ ParseDriver::parseDecimal(Token token, Number &value)
         APFloat::roundingMode::NearestTiesToEven);
     auto error = maybeFloat.takeError();
     if (!error) {
+        if (isInexact(maybeFloat.get()))
+            emitWarning(token.first, "inexact float literal");
+
         value = Number(binary64.convertToDouble());
         return success();
     }
@@ -299,8 +330,8 @@ ParseDriver::resolveExpr(ImportLocation nameLoc, StringRef name)
     }
     if (const auto result = (*sym)->dyn_cast<SymbolOpInterface>()) {
         if (const auto global = llvm::dyn_cast<GlobalOp>(result)) {
-            // Dereference the global here.
-            return expr<ReadOp>(nameLoc, expr<GetGlobalOp>(nameLoc, global));
+            // Materialize the global reference here.
+            return expr<GetGlobalOp>(nameLoc, global);
         }
     }
 
@@ -453,7 +484,8 @@ FailureOr<Expression> ParseDriver::call(
 void ParseDriver::pushConstexpr(ImportLocation introLoc)
 {
     // Start a constexpr scope by beginning an AssocOp.
-    beginAssoc(introLoc);
+    auto cexprOp = create<ConstexprOp>(introLoc);
+    m_builder.setInsertionPointToStart(&cexprOp.getExpression().front());
     pushScope(introLoc);
 }
 
@@ -462,7 +494,7 @@ FailureOr<LiteralAttr> ParseDriver::popConstexpr(Expr expr)
     // Finish the constexpr scope by closing the AssocOp.
     popScope();
     create<YieldOp>(expr.getLoc(), expr);
-    auto assocOp = end<AssocOp>();
+    auto cexprOp = end<ConstexprOp>();
 
     // Install a temporary diagnostic handler so that the user is not confused
     // as to where the type-checking and verification errors come from.
@@ -473,30 +505,22 @@ FailureOr<LiteralAttr> ParseDriver::popConstexpr(Expr expr)
     });
 
     const auto result = [&]() -> FailureOr<LiteralAttr> {
-        // The AssocOp and its descendants must verify and type check.
-        if (failed(verify(assocOp)) || failed(typeCheck(assocOp)))
+        // The ConstexprOp and its descendants must verify and type check.
+        if (failed(verify(cexprOp)) || failed(typeCheck(cexprOp)))
             return failure();
-
-        // Gather all the ops we will need to fold.
-        SmallVector<Operation *> workList;
-        assocOp.walk(
-            [&](Operation *op, const WalkStage &) { workList.push_back(op); });
-        llvm::erase_value(workList, assocOp);
 
         // Apply all of our known constant evaluation patterns.
-        GreedyRewriteConfig config;
-        config.strictMode = GreedyRewriteStrictness::AnyOp;
-        config.scope      = &assocOp.getMap();
-        if (failed(
-                applyOpPatternsAndFold(workList, *m_constexprPatterns, config)))
+        if (failed(applyPatternsAndFoldGreedily(
+                cexprOp.getExpression(),
+                *m_constexprPatterns)))
             return failure();
 
-        // Fold the AssocOp itself and try to get the resulting literal.
-        const auto attr = assocOp.fold(AssocOp::FoldAdaptor({}, assocOp))
+        // Fold the ConstexprOp itself and try to get the resulting literal.
+        const auto attr = cexprOp.fold(ConstexprOp::FoldAdaptor({}, cexprOp))
                               .dyn_cast<Attribute>();
         if (const auto literal = llvm::dyn_cast_if_present<LiteralAttr>(attr)) {
-            // The AssocOp is not needed anymore.
-            assocOp.erase();
+            // The ConstexprOp is not needed anymore.
+            cexprOp.erase();
             return literal;
         }
 
@@ -506,10 +530,10 @@ FailureOr<LiteralAttr> ParseDriver::popConstexpr(Expr expr)
 
     LLVM_DEBUG(
         llvm::dbgs() << "[Parser] failed to fold constant expression:\n";
-        assocOp.print(llvm::dbgs(), OpPrintingFlags{}.printGenericOpForm());
+        cexprOp.print(llvm::dbgs(), OpPrintingFlags{}.printGenericOpForm());
         llvm::dbgs() << "\n";);
 
-    assocOp.erase();
+    cexprOp.erase();
     if (failed(recoverFromError(
             expr.getLoc(),
             "expression did not evaluate to a constant")))

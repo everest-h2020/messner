@@ -9,6 +9,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include <algorithm>
 
@@ -368,6 +369,47 @@ LogicalResult DefineOp::inferReturnTypes(
 OpFoldResult DefineOp::fold(DefineOp::FoldAdaptor adaptor)
 {
     return adaptor.getInput();
+}
+
+//===----------------------------------------------------------------------===//
+// ConstexprOp implementation
+//===----------------------------------------------------------------------===//
+
+LogicalResult ConstexprOp::verifyRegions()
+{
+    // Check that all children are pure.
+    for (auto &op : getExpression().getOps())
+        if (!isPure(&op))
+            return op.emitOpError("is impure").attachNote(getLoc())
+                << "required by this operation";
+
+    return success();
+}
+
+OpFoldResult ConstexprOp::fold(ConstexprOp::FoldAdaptor)
+{
+    // Get the yielded value.
+    auto yieldOp     = llvm::cast<YieldOp>(&getExpression().front().back());
+    const auto yield = llvm::cast<Expression>(yieldOp.getValue());
+
+    // Fold to that value if it is constant.
+    LiteralAttr literal;
+    if (matchPattern(yield, m_Constant(&literal))) return literal;
+
+    return {};
+}
+
+LogicalResult ConstexprOp::typeCheck(AbstractTypeChecker &typeChecker)
+{
+    TypeCheckingAdaptor adaptor(typeChecker, *this);
+
+    // Get the yielded type.
+    auto yieldOp       = llvm::cast<YieldOp>(&getExpression().front().back());
+    const auto yield   = llvm::cast<Expression>(yieldOp.getValue());
+    const auto yieldTy = adaptor.getType(yield);
+    if (!yieldTy) return success();
+
+    return adaptor.refineBound(getResult(), yieldTy);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1246,11 +1288,14 @@ void ZipOp::build(
     // Insert the combinator op, assuming that it is a regular ExpressionOp.
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(&combinator);
-    builder.create(
-        combineLoc,
-        combineOp.getIdentifier(),
-        combinator.getArguments(),
-        {ExpressionType::get(builder.getContext())});
+    const auto result = builder
+                            .create(
+                                combineLoc,
+                                combineOp.getIdentifier(),
+                                combinator.getArguments(),
+                                {ExpressionType::get(builder.getContext())})
+                            ->getResult(0);
+    builder.create<YieldOp>(combineLoc, result);
 }
 
 LogicalResult ZipOp::verify()
@@ -1331,11 +1376,14 @@ void ReduceOp::build(
     // Insert the reduction op, assuming that it is a regular ExpressionOp.
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(&reduction);
-    builder.create(
-        reduceLoc,
-        reduceOp.getIdentifier(),
-        reduction.getArguments(),
-        {ExpressionType::get(builder.getContext())});
+    const auto result = builder
+                            .create(
+                                reduceLoc,
+                                reduceOp.getIdentifier(),
+                                reduction.getArguments(),
+                                {ExpressionType::get(builder.getContext())})
+                            ->getResult(0);
+    builder.create<YieldOp>(reduceLoc, result);
 }
 
 LogicalResult ReduceOp::verify()

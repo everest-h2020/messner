@@ -13,6 +13,7 @@ add_mlir_dialect_library(EKLDialect
         MLIRParser
         MLIRSideEffectInterfaces
         MLIRArithDialect
+        MLIRLLVMDialect
         MLIRMathDialect
         MLIRTensorDialect
         EKLEnums

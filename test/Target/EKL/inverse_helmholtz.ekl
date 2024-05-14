@@ -1,0 +1,11 @@
+kernel inverse_helmholtz(
+    S : f64[11, 11],
+    D : f64[11, 11, 11],
+    u : f64[11, 11, 11],
+    v : out& f64[11, 11, 11]
+)
+{
+    let t[i, j, k] = <+ a, b, c< S[i, a] * S[j, b] * S[k, c] * u[a, b, c];
+    let r = D * t;
+    out v[i, j, k] = <+ a, b, c< S[a, i] * S[b, j] * S[c, k] * r[a, b, c];
+}
