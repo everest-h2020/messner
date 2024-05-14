@@ -21,6 +21,11 @@ def EKL_Dialect : Dialect {
         TODO
     }];
 
+    let dependentDialects = [
+        "arith::ArithDialect",
+        "math::MathDialect",
+        "tensor::TensorDialect"];
+
     let hasConstantMaterializer = 1;
     let useDefaultAttributePrinterParser = 0;
     let useDefaultTypePrinterParser = 0;

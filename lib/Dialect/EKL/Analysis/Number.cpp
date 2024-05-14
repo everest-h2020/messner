@@ -64,6 +64,43 @@ cmp_sint_same_sign(const APInt &lhs, const APInt &rhs)
 // Number implementation
 //===----------------------------------------------------------------------===//
 
+Number::Number(llvm::APFloat value) : Number()
+{
+    assert(value.isIEEE() && value.isFinite());
+
+    // Decompose value into exponent and a normalized fraction.
+    int exp;
+    // NOTE: Is always exact, no rounding mode used in base2.
+    value =
+        llvm::frexp(value, exp, llvm::APFloat::roundingMode::NearestTiesToEven);
+    m_exponent = exp;
+
+    // Convert the normalized fraction into an integer.
+    const auto prec = APFloat::semanticsPrecision(value.getSemantics());
+    // NOTE: Is always exact..
+    value           = llvm::scalbn(
+        value,
+        -prec,
+        llvm::APFloat::roundingMode::NearestTiesToEven);
+    m_exponent -= prec;
+
+    // Extract the integer mantissa.
+    bool isExact;
+    llvm::APSInt mantissa;
+    value.convertToInteger(
+        mantissa,
+        llvm::APFloat::roundingMode::NearestTiesToEven,
+        &isExact);
+    assert(isExact);
+
+    // Store the mantissa, and ensure that we didn't break its sign.
+    m_mantissa = mantissa;
+    if (mantissa.isUnsigned() && m_mantissa.isNegative())
+        m_mantissa = m_mantissa.zext(m_mantissa.getBitWidth() + 1U);
+
+    reduce();
+}
+
 void mlir::ekl::Number::shrinkToFit()
 {
     reduce();
@@ -91,6 +128,40 @@ void mlir::ekl::Number::shrinkToFit()
         getMantissa().getRawData(),
         getMantissa().getNumWords() - shrink);
     m_mantissa = llvm::APInt(getMantissa().getBitWidth() - padding, newWords);
+}
+
+llvm::APFloat
+mlir::ekl::Number::toAPFloatWithRounding(llvm::fltSemantics &semantics) const
+{
+    auto mantissa = getMantissa();
+    auto exponent = getExponent();
+
+    // Shift the mantissa so that it fits in the available precision.
+    const auto prec = llvm::APFloat::semanticsPrecision(semantics);
+    if (mantissa.getActiveBits() > prec) {
+        const auto delta = mantissa.getActiveBits() - prec;
+        mantissa.ashrInPlace(delta);
+        exponent += delta;
+    }
+
+    // Saturate if necessary.
+    const auto expMin = llvm::APFloat::semanticsMinExponent(semantics);
+    const auto expMax = llvm::APFloat::semanticsMaxExponent(semantics);
+    if (exponent < expMin)
+        return llvm::APFloat::getSmallest(semantics, mantissa.isNegative());
+    if (exponent > expMax)
+        return llvm::APFloat::getLargest(semantics, mantissa.isNegative());
+
+    // Convert the integer mantissa and then apply the exponent.
+    llvm::APFloat result(semantics);
+    result.convertFromAPInt(
+        mantissa,
+        true,
+        llvm::APFloat::roundingMode::NearestTiesToEven);
+    return llvm::scalbn(
+        result,
+        exponent,
+        llvm::APFloat::roundingMode::NearestTiesToEven);
 }
 
 std::optional<Number::uword_t> mlir::ekl::Number::tryGetUInt() const

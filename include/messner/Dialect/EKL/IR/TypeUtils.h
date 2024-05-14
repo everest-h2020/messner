@@ -51,8 +51,8 @@ inline FailureOr<ExtentRange> getExtents(type_constraint auto type)
 {
     if (const auto contiguousTy =
             llvm::dyn_cast_if_present<ContiguousType>(type))
-        return success(contiguousTy.getExtents());
-    if (llvm::isa_and_present<ScalarType>(type)) return success(ExtentRange{});
+        return contiguousTy.getExtents();
+    if (llvm::isa_and_present<ScalarType>(type)) return ExtentRange{};
     return failure();
 }
 

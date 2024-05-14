@@ -27,6 +27,8 @@ class ArrayAttr;
 class InitializerAttr;
 class IdentityAttr;
 class ExtentAttr;
+class EllipsisAttr;
+class ErrorAttr;
 
 //===----------------------------------------------------------------------===//
 // Named constraints
@@ -115,6 +117,16 @@ struct LiteralAttr : Attribute {
     using Attribute::Attribute;
 
     /// @copydoc classof(Attribute)
+    [[nodiscard]] static bool classof(NumberAttr);
+    /// @copydoc classof(Attribute)
+    [[nodiscard]] static bool classof(ekl::IntegerAttr) { return true; }
+    /// @copydoc classof(Attribute)
+    [[nodiscard]] static bool classof(FloatAttr) { return true; }
+    /// @copydoc classof(Attribute)
+    [[nodiscard]] static bool classof(ekl::IndexAttr);
+    /// @copydoc classof(Attribute)
+    [[nodiscard]] static bool classof(BoolAttr) { return true; }
+    /// @copydoc classof(Attribute)
     [[nodiscard]] static bool classof(ScalarAttr) { return true; }
     /// @copydoc classof(Attribute)
     [[nodiscard]] static bool classof(StringAttr) { return true; }
@@ -126,11 +138,26 @@ struct LiteralAttr : Attribute {
     [[nodiscard]] static bool classof(IdentityAttr attr);
     /// @copydoc classof(Attribute)
     [[nodiscard]] static bool classof(ExtentAttr attr);
+    /// @copydoc classof(Attribute)
+    [[nodiscard]] static bool classof(EllipsisAttr attr);
+    /// @copydoc classof(Attribute)
+    [[nodiscard]] static bool classof(ErrorAttr attr);
     /// Determines whether @p attr is a LiteralAttr.
     ///
     /// @pre    `attr`
     [[nodiscard]] static bool classof(Attribute attr);
 
+    /*implicit*/ LiteralAttr(NumberAttr attr);
+    /*implicit*/ LiteralAttr(ekl::IntegerAttr attr)
+            : Attribute(static_cast<Attribute>(attr).getImpl())
+    {}
+    /*implicit*/ LiteralAttr(FloatAttr attr)
+            : Attribute(static_cast<Attribute>(attr).getImpl())
+    {}
+    /*implicit*/ LiteralAttr(ekl::IndexAttr attr);
+    /*implicit*/ LiteralAttr(BoolAttr attr)
+            : Attribute(static_cast<Attribute>(attr).getImpl())
+    {}
     /*implicit*/ LiteralAttr(ScalarAttr attr)
             : Attribute(static_cast<Attribute>(attr).getImpl())
     {}
@@ -141,6 +168,8 @@ struct LiteralAttr : Attribute {
     /*implicit*/ LiteralAttr(InitializerAttr attr);
     /*implicit*/ LiteralAttr(IdentityAttr attr);
     /*implicit*/ LiteralAttr(ExtentAttr attr);
+    /*implicit*/ LiteralAttr(EllipsisAttr attr);
+    /*implicit*/ LiteralAttr(ErrorAttr attr);
 
     /// Gets the associated LiteralType.
     [[nodiscard]] LiteralType getType() const;
@@ -202,6 +231,10 @@ inline ScalarType ScalarAttr::getType() const
 // LiteralAttr implementation
 //===----------------------------------------------------------------------===//
 
+inline bool LiteralAttr::classof(NumberAttr) { return true; }
+
+inline bool LiteralAttr::classof(ekl::IndexAttr) { return true; }
+
 inline bool LiteralAttr::classof(ekl::ArrayAttr) { return true; }
 
 inline bool LiteralAttr::classof(InitializerAttr) { return true; }
@@ -210,16 +243,31 @@ inline bool LiteralAttr::classof(IdentityAttr) { return true; }
 
 inline bool LiteralAttr::classof(ExtentAttr) { return true; }
 
+inline bool LiteralAttr::classof(EllipsisAttr) { return true; }
+
+inline bool LiteralAttr::classof(ErrorAttr) { return true; }
+
 inline bool LiteralAttr::classof(Attribute attr)
 {
     return llvm::TypeSwitch<Attribute, bool>(attr)
         .Case([](ScalarAttr) { return true; })
+        .Case([](StringAttr) { return true; })
         .Case([](ekl::ArrayAttr) { return true; })
         .Case([](InitializerAttr) { return true; })
         .Case([](IdentityAttr) { return true; })
         .Case([](ExtentAttr) { return true; })
+        .Case([](EllipsisAttr) { return true; })
+        .Case([](ErrorAttr) { return true; })
         .Default(false);
 }
+
+inline LiteralAttr::LiteralAttr(NumberAttr attr)
+        : Attribute(static_cast<Attribute>(attr).getImpl())
+{}
+
+inline LiteralAttr::LiteralAttr(ekl::IndexAttr attr)
+        : Attribute(static_cast<Attribute>(attr).getImpl())
+{}
 
 inline LiteralAttr::LiteralAttr(ekl::ArrayAttr attr)
         : Attribute(static_cast<Attribute>(attr).getImpl())
@@ -237,6 +285,14 @@ inline LiteralAttr::LiteralAttr(ExtentAttr attr)
         : Attribute(static_cast<Attribute>(attr).getImpl())
 {}
 
+inline LiteralAttr::LiteralAttr(EllipsisAttr attr)
+        : Attribute(static_cast<Attribute>(attr).getImpl())
+{}
+
+inline LiteralAttr::LiteralAttr(ErrorAttr attr)
+        : Attribute(static_cast<Attribute>(attr).getImpl())
+{}
+
 inline LiteralType LiteralAttr::getType() const
 {
     return llvm::TypeSwitch<Attribute, LiteralType>(*this)
@@ -245,7 +301,9 @@ inline LiteralType LiteralAttr::getType() const
         .Case([](ekl::ArrayAttr attr) { return attr.getType(); })
         .Case([](InitializerAttr attr) { return attr.getType(); })
         .Case([](IdentityAttr attr) { return attr.getType(); })
-        .Case([](ExtentAttr attr) { return attr.getType(); });
+        .Case([](ExtentAttr attr) { return attr.getType(); })
+        .Case([](EllipsisAttr attr) { return attr.getType(); })
+        .Case([](ErrorAttr attr) { return attr.getType(); });
 }
 
 } // namespace mlir::ekl

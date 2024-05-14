@@ -1,0 +1,135 @@
+%option bison-complete noyywrap
+%option bison-cc-namespace=mlir::ekl::detail bison-cc-parser=ParserImpl
+%option namespace=mlir::ekl::detail lexer=LexerImpl
+
+%top{
+#include "Parser.hpp"
+%}
+
+%class{
+    ParseDriver *m_driver;
+
+    [[nodiscard]] ParseDriver &driver() const { return *m_driver; }
+
+    [[nodiscard]] ImportLocation location()
+    {
+        return driver().getLocation(matcher().first(), matcher().size());
+    }
+    [[nodiscard]] StringRef text()
+    {
+        assert(has_matcher() && "expected matcher");
+        return StringRef(matcher().begin(), matcher().size());
+    }
+    [[nodiscard]] Token token()
+    {
+        return std::make_pair(location(), text());
+    }
+}
+
+%option ctorarg="ParseDriver &driver"
+%init{
+    m_driver = &driver;
+}
+
+delim_chars                 "{"|"}"|"("|")"|"["|"]"
+punct_chars                 ";"|":"|"="|"&"|","|"?"
+op_chars                    "+"|"-"|"*"|"/"|"%"|"^"|"~"|"#"|">"|"<"
+chars                       {delim_chars}|{punct_chars}|{op_chars}
+
+sign                        [+-]
+decdigit                    [0-9]
+exponent                    [eE]{sign}?{decdigit}+
+mant_norm                   {decdigit}+\.{decdigit}*
+mant_denorm                 \.{decdigit}+
+decfloat                    {sign}?({mant_norm}|{mant_denorm}){exponent}?
+decbinrat                   {sign}?{decdigit}+([pP]{sign}?{decdigit}+)?
+
+id_start                    [$_A-Za-z]
+id_continue                 {id_start}|{decdigit}
+ident                       {id_start}{id_continue}*
+
+string                      \"(\\.|[^\\"\n])*\"
+
+%%
+
+/*--- SPECIAL ----------------------------------------------------------------*/
+
+\s+                         /* ignore whitespace */
+"//".+                      /* ignore line comment */
+"/*"(.|\n)*?"*/"            /* ignore multiline comment */
+
+<<EOF>>                     { return ParserImpl::make_END(location()); }
+
+/*--- KEYWORDS ---------------------------------------------------------------*/
+
+"type"                      { return ParserImpl::make_KW_TYPE(location()); }
+"const"                     { return ParserImpl::make_KW_CONST(location()); }
+"global"                    { return ParserImpl::make_KW_GLOBAL(location()); }
+"kernel"                    { return ParserImpl::make_KW_KERNEL(location()); }
+"let"                       { return ParserImpl::make_KW_LET(location()); }
+"in"                        { return ParserImpl::make_KW_IN(location()); }
+"out"                       { return ParserImpl::make_KW_OUT(location()); }
+"inout"                     { return ParserImpl::make_KW_INOUT(location()); }
+"if"                        { return ParserImpl::make_KW_IF(location()); }
+"then"                      { return ParserImpl::make_KW_THEN(location()); }
+"else"                      { return ParserImpl::make_KW_ELSE(location()); }
+
+/*--- OPERATORS --------------------------------------------------------------*/
+
+"..."                       { return ParserImpl::make_ELLIPSIS(location()); }
+"<:"                        { return ParserImpl::make_UNIFY(location()); }
+"!>"                        { return ParserImpl::make_COERCE(location()); }
+"||"                        { return ParserImpl::make_LOR(location()); }
+"&&"                        { return ParserImpl::make_LAND(location()); }
+"=="                        { return ParserImpl::make_EQ(location()); }
+"~="                        { return ParserImpl::make_NE(location()); }
+"<="                        { return ParserImpl::make_LE(location()); }
+">="                        { return ParserImpl::make_GE(location()); }
+
+/*--- LITERALS ---------------------------------------------------------------*/
+
+"true"                      { return ParserImpl::make_BOOL(true, location()); }
+"false"                     { return ParserImpl::make_BOOL(false, location()); }
+
+_{decdigit}+                {
+    const auto tok = token();
+    extent_t value;
+    if (const auto result = driver().parseIndex(tok, value)) {
+        if (failed(*result)) return ParserImpl::make_END(tok.first);
+        return ParserImpl::make_INDEX(value, tok.first);
+    }
+}
+
+{decfloat}                  {
+    const auto tok = token();
+    Number value;
+    if (const auto result = driver().parseDecimal(tok, value)) {
+        if (failed(*result)) return ParserImpl::make_END(tok.first);
+        return ParserImpl::make_NUMBER(value, tok.first);
+    }
+}
+
+{decbinrat}                 {
+    const auto tok = token();
+    Number value;
+    if (const auto result = driver().parseRational(tok, value)) {
+        if (failed(*result)) return ParserImpl::make_END(tok.first);
+        return ParserImpl::make_NUMBER(value, tok.first);
+    }
+}
+
+{string}                    { return ParserImpl::make_STRING(text(), location()); }
+{ident}                     { return ParserImpl::make_ID(text(), location()); }
+
+/*--- FALLBACK ---------------------------------------------------------------*/
+
+{chars}                     { return ParserImpl::symbol_type(chr(), location()); }
+
+.                           {
+    const auto loc = location();
+    if (failed(driver().recoverFromError(loc, "unknown token")))
+        return ParserImpl::make_END(loc);
+}
+
+%%
+

@@ -120,6 +120,15 @@ def EKL_ArrayAttr : EKL_Attr<"Array", [TypedAttrInterface]> {
                 "mlir::ArrayAttr":$flattened), [{
             assert(arrayType);
             return $_get(arrayType.getContext(), arrayType, flattened);
+        }]>,
+        AttrBuilderWithInferredContext<(ins
+                "ArrayType":$arrayType,
+                "ArrayRef<Attribute>":$flattened), [{
+            assert(arrayType);
+            return $_get(
+                arrayType.getContext(),
+                arrayType,
+                mlir::ArrayAttr::get(arrayType.getContext(), flattened));
         }]>];
 
     let assemblyFormat = [{
@@ -256,6 +265,164 @@ def EKL_ExtentAttr : EKL_Attr<"Extent"> {
     }];
 }
 
+def EKL_EllipsisAttr : EKL_Attr<"Ellipsis"> {
+    let mnemonic = "ellipsis";
+    let summary = "Ellipsis literal attribute";
+    let description = [{
+        The `ekl.ellipsis` attribute represents the `...` literal, which expands
+        to identity indexers in a subscript expression.
+
+        Example:
+
+        ```
+        #ekl.ellipsis
+        #ekl<...>
+        ```
+    }];
+
+    code builderCall = [{
+        ::mlir::ekl::EllipsisAttr::get($_builder.getContext());
+    }];
+
+    code extraClassDeclaration = [{
+        // Gets the EllipsisType singleton instance.
+        [[nodiscard]] EllipsisType getType() const
+        {
+            return EllipsisType::get(getContext());
+        }
+    }];
+}
+
+def EKL_ErrorAttr : EKL_Attr<"Error"> {
+    let mnemonic = "error";
+    let summary = "Error literal attribute";
+    let description = [{
+        The `ekl.error` attribute represents the result of an erroneous
+        expression.
+
+        Example:
+
+        ```
+        #ekl.error
+        #ekl<?>
+        ```
+    }];
+
+    code builderCall = [{
+        ::mlir::ekl::ErrorAttr::get($_builder.getContext());
+    }];
+
+    code extraClassDeclaration = [{
+        // Gets the ErrorType singleton instance.
+        [[nodiscard]] ErrorType getType() const
+        {
+            return ErrorType::get(getContext());
+        }
+    }];
+}
+
+//===----------------------------------------------------------------------===//
+// Debug information
+//===----------------------------------------------------------------------===//
+
+def EKL_SourceLocation : EKL_Attr<"SourceLocation"> {
+    let mnemonic = "loc";
+    let summary = [{
+        The `ekl.loc` attribute is a workaround for an MLIR limitation that does
+        not allow the user to specify new derived `LocationAttr` attributes,
+        because the printer will not handle them correctly.
+
+        Instead, we use the attribute storage uniquer to store location info
+        in a `SourceLocationAttr`, and attach it to an `OpaqueLoc`. This is not
+        round-trippable, but at least it works at all.
+
+        Example:
+
+        ```
+        #ekl.loc<"file.ekl" 1:1>
+        #ekl.loc<"file.ekl" 1:1:10>
+        #ekl.loc<"file.ekl" 1:1:4:10>
+        ```
+    }];
+
+    let parameters = (ins
+        "StringAttr":$filename,
+        "unsigned":$startLine,
+        "unsigned":$startColumn,
+        "unsigned":$endLine,
+        "unsigned":$endColumn);
+
+    let builders = [
+        AttrBuilderWithInferredContext<(ins
+                "StringAttr":$filename,
+                "unsigned":$startLine,
+                "unsigned":$startColumn,
+                "unsigned":$endLine,
+                "unsigned":$endColumn), [{
+            assert(filename);
+            assert(startLine <= endLine);
+            assert(startLine != endLine || startColumn <= endColumn);
+
+            return $_get(
+                filename.getContext(),
+                filename,
+                startLine,
+                startColumn,
+                endLine,
+                endColumn);
+        }]>,
+        AttrBuilder<(ins
+                "StringRef":$filename,
+                "unsigned":$startLine,
+                "unsigned":$startColumn,
+                "unsigned":$endLine,
+                "unsigned":$endColumn), [{
+            return get(
+                StringAttr::get($_ctxt, filename),
+                startLine,
+                startColumn,
+                endLine,
+                endColumn);
+        }]>,
+        AttrBuilderWithInferredContext<(ins
+                "StringAttr":$filename,
+                "unsigned":$line,
+                "unsigned":$column), [{
+            return get(filename, line, column, line, column);
+        }]>,
+        AttrBuilder<(ins
+                "StringRef":$filename,
+                "unsigned":$line,
+                "unsigned":$column), [{
+            return get(StringAttr::get($_ctxt, filename), line, column);
+        }]>
+    ];
+
+    let assemblyFormat = [{
+        `<`
+        $filename
+        custom<SourceRange>($startLine, $startColumn, $endLine, $endColumn)
+        `>`
+    }];
+
+    code extraClassDeclaration = [{
+        /// Obtains the SourceLocationAttr inside @p loc , if any.
+        [[nodiscard]] static SourceLocationAttr fromLocation(OpaqueLoc loc);
+
+        /// Obtains a FileLineColLoc that encapsulates the start location.
+        [[nodiscard]] FileLineColLoc toStartLocation() const
+        {
+            return FileLineColLoc::get(
+                getFilename(),
+                getStartLine(),
+                getStartColumn());
+        }
+
+        /// Obtains an OpaqueLoc that encapsulates this SourceLocationAttr.
+        [[nodiscard]] OpaqueLoc toLocation() const;
+    }];
+}
+
 //===----------------------------------------------------------------------===//
 // Named constraints
 //===----------------------------------------------------------------------===//
@@ -322,6 +489,8 @@ def EKL_LiteralAttr : Attr<
             - InitializerAttr
             - IdentityAttr
             - ExtentAttr
+            - EllipsisAttr
+            - ErrorAttr
     }];
 
     let storageType = "::mlir::ekl::LiteralAttr";

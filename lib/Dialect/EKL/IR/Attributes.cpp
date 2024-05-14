@@ -12,8 +12,52 @@
 
 #include "llvm/ADT/TypeSwitch.h"
 
+#include <bit>
+
 using namespace mlir;
 using namespace mlir::ekl;
+
+//===----------------------------------------------------------------------===//
+// Custom directives
+//===----------------------------------------------------------------------===//
+
+static ParseResult parseSourceRange(
+    AsmParser &parser,
+    unsigned &startLine,
+    unsigned &startColumn,
+    unsigned &endLine,
+    unsigned &endColumn)
+{
+    if (parser.parseInteger(startLine) || parser.parseColon()
+        || parser.parseInteger(startColumn))
+        return failure();
+
+    endLine   = startLine;
+    endColumn = endLine;
+    if (parser.parseOptionalColon()) return success();
+
+    if (parser.parseInteger(endColumn)) return failure();
+    if (parser.parseOptionalColon()) return success();
+
+    endLine = endColumn;
+    return parser.parseInteger(endColumn);
+}
+
+static void printSourceRange(
+    AsmPrinter &printer,
+    unsigned startLine,
+    unsigned startColumn,
+    unsigned endLine,
+    unsigned endColumn)
+{
+    printer << startLine << ":" << startColumn;
+    if (endLine == startLine) {
+        if (endColumn == startColumn) return;
+        printer << ":" << endColumn;
+        return;
+    }
+    printer << ":" << endLine << ":" << endColumn;
+}
 
 //===- Generated implementation -------------------------------------------===//
 
@@ -85,6 +129,25 @@ LogicalResult ekl::InitializerAttr::verify(
 }
 
 //===----------------------------------------------------------------------===//
+// SourceLocationAttr implementation
+//===----------------------------------------------------------------------===//
+
+SourceLocationAttr SourceLocationAttr::fromLocation(OpaqueLoc loc)
+{
+    if (!loc || loc.getUnderlyingTypeID() != getTypeID()) return {};
+    return SourceLocationAttr(
+        std::bit_cast<const ImplType *>(loc.getUnderlyingLocation()));
+}
+
+OpaqueLoc SourceLocationAttr::toLocation() const
+{
+    return OpaqueLoc::get(
+        std::bit_cast<std::uintptr_t>(getImpl()),
+        getTypeID(),
+        toStartLocation());
+}
+
+//===----------------------------------------------------------------------===//
 // EKLDialect
 //===----------------------------------------------------------------------===//
 
@@ -94,6 +157,10 @@ Attribute EKLDialect::parseAttribute(DialectAsmParser &parser, Type type) const
         return IdentityAttr::get(parser.getContext());
     if (!parser.parseOptionalStar())
         return ExtentAttr::get(parser.getContext());
+    if (!parser.parseOptionalEllipsis())
+        return EllipsisAttr::get(parser.getContext());
+    if (!parser.parseOptionalQuestion())
+        return ErrorAttr::get(parser.getContext());
 
     StringRef keyword;
     Attribute result;
@@ -126,6 +193,14 @@ void EKLDialect::printAttribute(Attribute attr, DialectAsmPrinter &os) const
     }
     if (llvm::isa<ExtentAttr>(attr)) {
         os << "*";
+        return;
+    }
+    if (llvm::isa<EllipsisAttr>(attr)) {
+        os << "...";
+        return;
+    }
+    if (llvm::isa<ErrorAttr>(attr)) {
+        os << "?";
         return;
     }
     if (const auto indexAttr = llvm::dyn_cast<IndexAttr>(attr)) {

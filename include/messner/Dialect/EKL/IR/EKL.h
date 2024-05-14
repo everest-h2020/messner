@@ -6,6 +6,7 @@
 #pragma once
 
 #include "messner/Dialect/EKL/Analysis/TypeCheckingAdaptor.h"
+#include "messner/Dialect/EKL/IR/DiagHandler.h"
 #include "messner/Dialect/EKL/IR/Ops.h"
 #include "messner/Dialect/EKL/IR/TypeUtils.h"
 #include "messner/Dialect/EKL/Interfaces/Interfaces.h"

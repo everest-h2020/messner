@@ -26,9 +26,9 @@ namespace mlir::ekl {
 /// @retval Type        Unified type of @p lhs and @p rhs .
 inline FailureOr<Type> unify(Type lhs, Type rhs)
 {
-    if (!lhs || !rhs) return success(Type{});
-    if (isSubtype(lhs, rhs)) return success(rhs);
-    if (isSubtype(rhs, lhs)) return success(lhs);
+    if (!lhs || !rhs) return Type{};
+    if (isSubtype(lhs, rhs)) return rhs;
+    if (isSubtype(rhs, lhs)) return lhs;
     return failure();
 }
 
@@ -63,10 +63,10 @@ FailureOr<Type> unify(SmallVectorImpl<Type> &types);
 /// @retval ArrayType   Broadcasted ArrayType of @p lhs and @p rhs .
 inline FailureOr<ArrayType> broadcast(ArrayType lhs, ExtentRange rhs)
 {
-    if (!lhs) return success(ArrayType{});
+    if (!lhs) return ArrayType{};
     auto extents = llvm::to_vector(lhs.getExtents());
     if (failed(broadcast(extents, rhs))) return failure();
-    return success(lhs.cloneWith(extents));
+    return lhs.cloneWith(extents);
 }
 
 /// Broadcasts @p lhs to @p rhs .
@@ -94,11 +94,11 @@ inline FailureOr<ArrayType> broadcast(ArrayType lhs, ExtentRange rhs)
 /// @retval ArrayType   Broadcasted ArrayType of @p lhs and @p rhs .
 inline FailureOr<ArrayType> broadcast(Type lhs, ExtentRange rhs)
 {
-    if (!lhs) return success(ArrayType{});
+    if (!lhs) return ArrayType{};
     if (const auto arrayTy = llvm::dyn_cast<ArrayType>(lhs))
         return broadcast(arrayTy, rhs);
     if (const auto scalarTy = llvm::dyn_cast<ScalarType>(lhs))
-        return success(broadcast(scalarTy, rhs));
+        return broadcast(scalarTy, rhs);
     return failure();
 }
 
@@ -140,11 +140,10 @@ broadcast(ArrayRef<Type> types, SmallVectorImpl<extent_t> &extents);
 /// @retval ArrayType   The ArrayType equivalent to @p type .
 inline FailureOr<ArrayType> broadcast(type_constraint auto type)
 {
-    if (!type) return success(ArrayType{});
-    if (const auto arrayTy = llvm::dyn_cast<ArrayType>(type))
-        return success(arrayTy);
+    if (!type) return ArrayType{};
+    if (const auto arrayTy = llvm::dyn_cast<ArrayType>(type)) return arrayTy;
     if (const auto scalarTy = llvm::dyn_cast<ScalarType>(type))
-        return success(ArrayType::get(scalarTy));
+        return ArrayType::get(scalarTy);
     return failure();
 }
 

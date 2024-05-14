@@ -6,6 +6,9 @@
 #include "messner/Dialect/EKL/IR/Base.h"
 
 #include "messner/Dialect/EKL/IR/EKL.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/InliningUtils.h"
 
@@ -73,13 +76,13 @@ Operation *EKLDialect::materializeConstant(
     Type type,
     Location location)
 {
-    if (const auto literalAttr = llvm::dyn_cast<LiteralAttr>(attr)) {
-        if (type != literalAttr.getType()) {
-            // TODO: Unify or coerce?
-            return nullptr;
-        }
+    // LiteralOp only materializes expression values.
+    if (const auto exprTy = llvm::dyn_cast<ExpressionType>(type)) {
+        if (const auto literalAttr = llvm::dyn_cast<LiteralAttr>(attr)) {
+            if (exprTy.getTypeBound() != literalAttr.getType()) return nullptr;
 
-        return builder.create<LiteralOp>(location, literalAttr);
+            return builder.create<LiteralOp>(location, literalAttr);
+        }
     }
 
     return nullptr;

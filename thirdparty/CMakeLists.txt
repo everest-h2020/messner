@@ -16,5 +16,8 @@ set(REflex_EXECUTABLE ${CMAKE_CURRENT_BINARY_DIR}/bin/reflex CACHE STRING "" FOR
 set(REflex_LIBRARY ${CMAKE_CURRENT_BINARY_DIR}/lib/libreflex_static_lib.a CACHE STRING "" FORCE)
 set(REflex_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/RE-flex/include CACHE STRING "" FORCE)
 
+target_compile_options(Reflex PRIVATE "-w")
+target_compile_options(ReflexLibStatic PRIVATE "-w")
+
 add_executable(REflex::reflex ALIAS Reflex)
 add_library(REflex::libreflex ALIAS ReflexLibStatic)

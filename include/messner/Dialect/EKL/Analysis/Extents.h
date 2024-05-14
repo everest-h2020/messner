@@ -106,8 +106,8 @@ inline SmallVector<extent_t> concat(ExtentRange lhs, ExtentRange rhs)
 /// @retval extent_t    The resulting extent.
 inline FailureOr<extent_t> broadcast(extent_t lhs, extent_t rhs)
 {
-    if (lhs == 1 || lhs == rhs) return success(rhs);
-    if (rhs == 1) return success(lhs);
+    if (lhs == 1 || lhs == rhs) return rhs;
+    if (rhs == 1) return lhs;
     return failure();
 }
 

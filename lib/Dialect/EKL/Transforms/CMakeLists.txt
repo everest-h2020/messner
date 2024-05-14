@@ -1,4 +1,5 @@
 add_mlir_library(EKLTransforms
+        Lower.cpp
         TypeCheck.cpp
 
     ENABLE_AGGREGATION

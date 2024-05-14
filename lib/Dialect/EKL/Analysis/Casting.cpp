@@ -22,7 +22,7 @@ static FailureOr<Type> reducePairwise(SmallVectorImpl<Type> &types, auto fn)
 
     if (types.empty()) {
         // The empty worklist reduces to the unbounded type.
-        return success(Type{});
+        return Type{};
     }
 
     // Reduce the list until it is irreducible.
@@ -35,7 +35,7 @@ static FailureOr<Type> reducePairwise(SmallVectorImpl<Type> &types, auto fn)
             if (succeeded(maybeUnified)) {
                 if (!*maybeUnified) {
                     // We were able to produce the unbounded type, abort.
-                    return success(Type{});
+                    return Type{};
                 }
 
                 // Update the head element and stop searching.
@@ -69,7 +69,7 @@ static FailureOr<Type> reducePairwise(SmallVectorImpl<Type> &types, auto fn)
     }
 
     // No types we need to unify are left.
-    return success(types.front());
+    return types.front();
 }
 
 //===----------------------------------------------------------------------===//

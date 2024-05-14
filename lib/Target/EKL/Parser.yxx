@@ -1,0 +1,582 @@
+%skeleton "lalr1.cc"
+%require  "3.5"
+%language "c++"
+
+%defines
+%define api.namespace       {mlir::ekl::detail}
+%define api.parser.class    {ParserImpl}
+%define api.token.constructor   true
+%define api.value.type      variant
+%define api.location.type   {mlir::ekl::ImportLocation}
+%define parse.assert        false
+%define parse.error         verbose
+
+%locations
+
+%code requires{
+#include "ParseDriver.h"
+
+namespace mlir::ekl::detail {
+
+class LexerImpl;
+
+} // namespace mlir::ekl::detail
+
+}
+
+%parse-param                { ParseDriver &driver }
+%parse-param                { detail::LexerImpl &lexer }
+
+%{
+#include "Lexer.hpp"
+
+#undef  yylex
+#define yylex               lexer.lex
+%}
+
+/*--- SPECIAL ----------------------------------------------------------------*/
+
+%token                      END         0 "end of input"
+
+/*--- KEYWORDS ---------------------------------------------------------------*/
+
+%token                      KW_TYPE     "type"
+%token                      KW_CONST    "const"
+%token                      KW_GLOBAL   "global"
+%token                      KW_KERNEL   "kernel"
+%token                      KW_LET      "let"
+%token                      KW_IN       "in"
+%token                      KW_OUT      "out"
+%token                      KW_INOUT    "inout"
+%token                      KW_IF       "if"
+%token                      KW_THEN     "then"
+%token                      KW_ELSE     "else"
+
+/*--- OPERATORS --------------------------------------------------------------*/
+
+%token                      ELLIPSIS    "..."
+%token                      UNIFY       "<:"
+%token                      COERCE      "!>"
+%token                      LOR         "||"
+%token                      LAND        "&&"
+%token                      EQ          "=="
+%token                      NE          "~="
+%token                      LE          "<="
+%token                      GE          ">="
+
+/*--- LITERALS ---------------------------------------------------------------*/
+
+%token<bool>                BOOL
+%token<extent_t>            INDEX
+%token<Number>              NUMBER
+%token<StringRef>           STRING
+%token<StringRef>           ID
+
+/*--- NON-TERMINALS ----------------------------------------------------------*/
+
+%type<LiteralAttr>          literal
+
+%type<Expr>                 expr
+%type<ExprList>             expr-list-0
+%type<ExprList>             expr-list-1
+%type<Expr>                 expr-0
+%type<Expr>                 expr-1
+%type<Expr>                 expr-2
+%type<Expr>                 expr-3
+%type<Expr>                 expr-4
+%type<Expr>                 expr-5
+%type<Expr>                 expr-6
+%type<Expr>                 expr-7
+%type<Expr>                 expr-8
+%type<Expr>                 expr-9
+%type<Expr>                 expr-10
+%type<Expr>                 expr-11
+%type<Expr>                 expr-12
+%type<Expr>                 expr-13
+%type<Expr>                 if-expr
+%type<Expr>                 reduce-expr
+%type<StringRef>            reduce-op
+
+%type<TypeExpr>             type-expr
+%type<TypeExpr>             type-expr-0
+%type<TypeExpr>             type-expr-1
+%type<TypeExpr>             type-spec
+
+%type<ReferenceKind>        ref-spec
+%type<Extents>              extent-spec
+
+%type<ConstExpr>            const-expr
+%type<ConstExprList>        const-expr-list-0
+%type<ConstExprList>        const-expr-list-1
+%type<InitializerAttr>      init-spec
+
+%%
+
+file                        : sym-def-list-0
+                            ;
+
+//===----------------------------------------------------------------------===//
+// Symbol definitions
+//===----------------------------------------------------------------------===//
+//
+// Symbol definitions are added to the program container.
+
+sym-def                     : type-def ';'
+                            | const-def ';'
+                            | global-def ';'
+                            | kernel-def
+                            | error ';'
+{
+    // Attempt immediate error recovery.
+    if (failed(driver.recoverFromError())) YYABORT;
+    yyerrok;
+}
+                            ;
+
+sym-def-list-0              : sym-def-list-0 sym-def
+                            | %empty
+                            ;
+
+type-def                    : "type" ID[name] '=' type-expr[type]
+                              { driver.defineType(@name, $name, $type); }
+                            ;
+
+const-def                   : "const" ID[name] '=' const-expr[value]
+                              { driver.defineConst(@name, $name, $value); }
+                            ;
+
+global-def                  : "global" ID[name] type-spec[type] init-spec[init]
+{
+    // Create a new GlobalOp.
+    if (failed(driver.global(@name, $name, $type, $init))) YYABORT;
+}
+                            ;
+
+kernel-def                  : "kernel" ID[name] '('
+{
+    // Begin a new KernelOp.
+    if (failed(driver.beginKernel(@name, $name))) YYABORT;
+    // Push a new variable scope onto the stack.
+    driver.pushScope(@3);
+}
+                              arg-decl-list-0 ')' '{' stmt-list-0 '}'
+{
+    // Pop the variable scope from the stack.
+    driver.popScope();
+    // End the current KernelOp.
+    driver.end<KernelOp>();
+}
+                            ;
+
+//===----------------------------------------------------------------------===//
+// Statements
+//===----------------------------------------------------------------------===//
+//
+// Statements are simply added to the current container.
+
+stmt                        : let-stmt ';'
+                            | write-stmt ';'
+                            // | if-stmt ';'
+                            | type-def ';'
+                            | const-def ';'
+                            // | '{'
+                            //   { driver.pushScope(@1); }
+                            //   stmt-list-0 '}'
+                            //   { driver.popScope(); }
+                            | ';'
+                            | error ';'
+{
+    // Attempt immediate error recovery.
+    if (failed(driver.recoverFromError())) YYABORT;
+    yyerrok;
+}
+                            ;
+
+stmt-list-0                 : stmt-list-0 stmt
+                            | %empty
+                            ;
+
+let-stmt                    : "let" ID[name] type-spec[type] '=' expr[value]
+{
+    // A trailing type specifier causes coersion.
+    const auto value = $type
+      ? Expr(driver.expr<CoerceOp>(@type, $value, $type), @value)
+      : $value;
+    // Define the expression in the current scope, shadowing everything.
+    driver.defineExpr(@name, $name, value);
+}
+                            // AssocOp
+                            | "let" ID[name] '['
+{
+    // Begin a new AssocOp.
+    driver.beginAssoc(@1);
+    // Push a new variable scope onto the stack.
+    driver.pushScope(@3);
+}
+                              arg-decl-list-0 ']' type-spec[type] '=' expr[value]
+{
+    // A trailing type specifier causes coersion.
+    const auto value = $type
+        ? Expr(driver.expr<CoerceOp>(@type, $value, $type), @value)
+        : $value;
+    // Pop the variable scope from the stack.
+    driver.popScope();
+    // End the current AssopOp by yielding the value.
+    const auto result = driver.yieldAndEnd<AssocOp>(value);
+    // Define the expression in the current scope, shadowing everything.
+    driver.defineExpr(@name, $name, result);
+}
+                            ;
+
+write-stmt                  : "out" ID[name] '=' expr[value]
+{
+    // Create a write operation to that name.
+    if (failed(driver.write(@1, @name, $name, $value))) YYABORT;
+}
+                            | "out" ID[name] '['
+{
+    // Begin a new AssocOp.
+    driver.beginAssoc(@1);
+    // Push a new variable scope onto the stack.
+    driver.pushScope(@3);
+}
+                              arg-decl-list-0 ']' '=' expr[value]
+{
+    // Pop the variable scope from the stack.
+    driver.popScope();
+    // End the current AssopOp by yielding the value.
+    const auto result = Expr(driver.yieldAndEnd<AssocOp>($value), @value);
+    // Create a write operation to that name using the assoc result.
+    if (failed(driver.write(@1, @name, $name, result))) YYABORT;
+}
+                            ;
+
+// if-stmt                     : "if" expr-0[condition] "then"
+//                               { driver.beginIf(@1, $condition); }
+//                               stmt else-stmt
+//                               { driver.endIf(); }
+//                             ;
+//
+// else-stmt                   : %empty
+//                             | "else"
+//                               { driver.beginElse(); }
+//                               stmt
+//                             ;
+
+//===----------------------------------------------------------------------===//
+// Argument declarations
+//===----------------------------------------------------------------------===//
+//
+// Argument declarations always affect the current container, inserting new
+// block arguments and declaring new expression symbols.
+
+arg-decl                    : ID[name] type-spec[type]
+{
+    // Defines a new block argument in the current scope.
+    if (failed(driver.defineArg(@name, $name, $type))) YYABORT;
+}
+                            ;
+
+arg-decl-list-0             : arg-decl-list-1
+                            | %empty
+                            ;
+
+arg-decl-list-1             : arg-decl-list-1 ',' arg-decl
+                            | arg-decl
+                            ;
+
+//===----------------------------------------------------------------------===//
+// Literal expressions
+//===----------------------------------------------------------------------===//
+//
+// A literal expression is a constant expression.
+
+literal                     : BOOL   { $$ = driver.getLiteral($1); }
+                            | INDEX  { $$ = driver.getLiteral($1); }
+                            | NUMBER { $$ = driver.getLiteral(std::move($1)); }
+                            | STRING { $$ = driver.getLiteral($1); }
+                            | ':'    { $$ = driver.getIdentityLiteral(); }
+                            | '*'    { $$ = driver.getExtentLiteral(); }
+                            | "..."  { $$ = driver.getEllipsisLiteral(); }
+                            | '?'    { $$ = driver.getErrorLiteral(); }
+                            ;
+
+//===----------------------------------------------------------------------===//
+// Expressions
+//===----------------------------------------------------------------------===//
+//
+// Expressions create ExpressionOp operations in the current container, and
+// track the value that they produce.
+
+expr                        : expr-0
+                            | if-expr
+                            ;
+
+expr-list-0                 : expr-list-1
+                            | %empty      { $$ = {}; }
+                            ;
+
+expr-list-1                 : expr-list-1[head] ',' expr[tail]
+                              { $$ = append(std::move($head), $tail); }
+                            | expr
+                              { $$ = {$1}; }
+                            ;
+
+expr-0                      : expr-1
+                            | '[' expr-list-1[operands] ']'
+                              { $$ = {driver.expr<StackOp>(@1, $operands), @$}; }
+                            ;
+
+expr-1                      : expr-2
+                            | reduce-expr
+                            | expr-2[condition] '?'
+                              expr-2[trueValue]
+                              ':' expr-2[falseValue]
+                              { $$ = {driver.expr<ChoiceOp>(@2, $condition, $trueValue, $falseValue), @$}; }
+                            ;
+
+expr-2                      : expr-3
+                            | expr-3[value] "<:" type-expr[type]
+                              { $$ = {driver.expr<UnifyOp>(@2, $value, $type), @$}; }
+                            | expr-3[value] '~' extent-spec[extents]
+                              { $$ = {driver.expr<BroadcastOp>(@2, $value, $extents.getValue()), @$}; }
+                            | expr-3[value] "!>" type-expr[type]
+                              { $$ = {driver.expr<CoerceOp>(@2, $value, $type), @$}; }
+                            ;
+
+expr-3                      : expr-4
+                            | expr-4[lhs] "||" expr-3[rhs]
+                              { $$ = {driver.expr<LogicalOrOp>(@2, $lhs, $rhs), @$}; }
+                            ;
+
+expr-4                      : expr-5
+                            | expr-5[lhs] "&&" expr-4[rhs]
+                              { $$ = {driver.expr<LogicalAndOp>(@2, $lhs, $rhs), @$}; }
+                            ;
+
+expr-5                      : expr-6
+                            | expr-6[lhs] "==" expr-5[rhs]
+                              { $$ = {driver.expr<CompareOp>(@2, RelationKind::Equivalent, $lhs, $rhs), @$}; }
+                            | expr-6[lhs] "~=" expr-5[rhs]
+                              { $$ = {driver.expr<CompareOp>(@2, RelationKind::Antivalent, $lhs, $rhs), @$}; }
+                            ;
+
+expr-6                      : expr-7
+                            | expr-7[lhs] '<' expr-6[rhs]
+                              { $$ = {driver.expr<CompareOp>(@2, RelationKind::LessThan, $lhs, $rhs), @$}; }
+                            | expr-7[lhs] "<=" expr-6[rhs]
+                              { $$ = {driver.expr<CompareOp>(@2, RelationKind::LessOrEqual, $lhs, $rhs), @$}; }
+                            | expr-7[lhs] ">=" expr-6[rhs]
+                              { $$ = {driver.expr<CompareOp>(@2, RelationKind::GreaterOrEqual, $lhs, $rhs), @$}; }
+                            | expr-7[lhs] '>' expr-6[rhs]
+                              { $$ = {driver.expr<CompareOp>(@2, RelationKind::GreaterThan, $lhs, $rhs), @$}; }
+                            ;
+
+expr-7                      : expr-8
+                            | expr-8[lhs] '+' expr-7[rhs]
+                              { $$ = {driver.expr<AddOp>(@2, $lhs, $rhs), @$}; }
+                            | expr-8[lhs] '-' expr-7[rhs]
+                              { $$ = {driver.expr<SubtractOp>(@2, $lhs, $rhs), @$}; }
+                            ;
+
+expr-8                      : expr-9
+                            | expr-9[lhs] '#' expr-8[rhs]
+                              { $$ = {driver.expr<TensorProductOp>(@2, $lhs, $rhs), @$}; }
+                            ;
+
+expr-9                      : expr-10
+                            | expr-10[lhs] '*' expr-9[rhs]
+                              { $$ = {driver.expr<MultiplyOp>(@2, $lhs, $rhs), @$}; }
+                            | expr-10[lhs] '/' expr-9[rhs]
+                              { $$ = {driver.expr<DivideOp>(@2, $lhs, $rhs), @$}; }
+                            | expr-10[lhs] '%' expr-9[rhs]
+                              { $$ = {driver.expr<RemainderOp>(@2, $lhs, $rhs), @$}; }
+                            ;
+
+expr-10                     : expr-11
+                            | '-' expr-11[operand]
+                              { $$ = {driver.expr<NegateOp>(@1, $operand), @$}; }
+                            | '~' expr-11[operand]
+                              { $$ = {driver.expr<LogicalNotOp>(@1, $operand), @$}; }
+                            ;
+
+expr-11                     : expr-12
+                            // PowerOp
+                            | expr-11[lhs] '^' expr-12[rhs]
+                              { $$ = {driver.expr<PowerOp>(@2, $lhs, $rhs), @$}; }
+                            ;
+
+expr-12                     : expr-13
+                            // SubscriptOp
+                            | expr-13[array] '[' expr-list-1[subscripts] ']'
+                              { $$ = {driver.expr<SubscriptOp>(@2, $array, $subscripts), @$}; }
+                            | ID[callee] '(' expr-list-0[operands] ')'
+{
+    const auto result = driver.call(@callee, $callee, $operands);
+    if (failed(result)) YYABORT;
+    $$ = {*result, @$};
+}
+                            ;
+
+expr-13                     : literal
+                              { $$ = {driver.expr<LiteralOp>(@1, $1), @$}; }
+                            | ID
+{
+    const auto resolved = driver.resolveExpr(@1, $1);
+    if (failed(resolved)) YYABORT;
+    $$ = {*resolved, @$};
+}
+                            | '(' expr ')'             { $$ = $expr; }
+                            | '{'
+                              { driver.pushScope(@1); }
+                              stmt-list-0 expr '}'
+                              { driver.popScope(); $$ = $expr; }
+                            | '(' error ')'
+{
+    // Attempt immediate error recovery.
+    if (failed(driver.recoverFromError())) YYABORT;
+    yyerrok;
+}
+                            ;
+
+if-expr                     : "if" expr-0[condition] "then"
+                              { driver.beginIf(@1, $condition, true); }
+                              expr-0[trueValue] "else"
+                              { driver.beginElse($trueValue); }
+                              expr-0[falseValue]
+                              { $$ = {driver.yieldAndEnd<IfOp>($falseValue), @$}; }
+                            ;
+
+reduce-expr                 : '<' reduce-op[op]
+{
+    // Begin a new ReduceOp.
+    driver.beginReduce(@1, @op, OperationName($op, driver.getContext()));
+    // Push a new variable scope onto the stack.
+    driver.pushScope(@1);
+}
+                              arg-decl-list-0 '<' expr-2[value]
+{
+    // Pop the variable scope from the stack.
+    driver.popScope();
+    // End the current ReduceOp by yielding the value.
+    $$ = {driver.yieldAndEnd<ReduceOp>($value), @$};
+}
+                            ;
+
+reduce-op                   : '+' { $$ = AddOp::getOperationName(); }
+                            | '*' { $$ = MultiplyOp::getOperationName(); }
+                            | ID
+{
+    if ($1 == "min")
+        $$ = MinOp::getOperationName();
+    else if ($1 == "max")
+        $$ = MaxOp::getOperationName();
+    else {
+        // Error recovery will proceed with an undefined operation name.
+        $$ = "ekl.unknown";
+        if (failed(driver.recoverFromError(@1, "unknown reduction operation")))
+            YYABORT;
+    }
+}
+                            ;
+
+//===----------------------------------------------------------------------===//
+// Type expressions
+//===----------------------------------------------------------------------===//
+//
+// Type expressions must always produce a type at parsing time, and are the only
+// way to produce a type at all (no types as values).
+
+type-expr                   : type-expr-0
+                            | ref-spec[kind] type-expr-0[pointee]
+{
+    const auto type = driver.referenceType($kind, $pointee);
+    if (failed(type)) YYABORT;
+    $$ = {*type, @$};
+}
+                            ;
+
+type-expr-0                 : type-expr-1
+                            | type-expr-1[scalar] extent-spec[extents]
+{
+    const auto type = driver.arrayType($scalar, $extents);
+    if (failed(type)) YYABORT;
+    $$ = {*type, @$};
+}
+                            ;
+
+type-expr-1                 : ID
+{
+    const auto resolved = driver.resolveType(@1, $1);
+    if (failed(resolved)) YYABORT;
+    $$ = {*resolved, @$};
+}
+                            | INDEX { $$ = {driver.getIndexType($1), @$}; }
+                            | '?'   { $$ = {driver.getErrorType(), @$}; }
+                            ;
+
+type-spec                   : %empty              { $$ = {Type{}, @$}; }
+                            | ':' type-expr[type] { $$ = $type; }
+                            ;
+
+ref-spec                    : '&'         { $$ = ReferenceKind::In; }
+                            | "in" '&'    { $$ = ReferenceKind::In; }
+                            | "out" '&'   { $$ = ReferenceKind::Out; }
+                            | "inout" '&' { $$ = ReferenceKind::InOut; }
+                            ;
+
+extent-spec                 : '[' const-expr-list-0[extents] ']'
+{
+    const auto evaluated = driver.extents($extents);
+    if (failed(evaluated)) YYABORT;
+    $$ = {std::move(*evaluated), @$};
+}
+                            ;
+
+//===----------------------------------------------------------------------===//
+// Constant expressions
+//===----------------------------------------------------------------------===//
+//
+// Constant expression must always produce a constant value at parsing time, and
+// are the only way to produce type parameters (no dependent types). This is
+// implemented by accepting arbitrary expressions, and then greedily folding
+// them. Thus, constant expressions are directly tied to folder implementations
+// of the EKL dialect.
+//
+// Since the expression parser will insert local operations, pushing a constexpr
+// scope creates an ephemereal container region at the current location, which
+// is deleted when the scope is popped.
+
+const-expr                  : { driver.pushConstexpr(@$); }
+                              expr
+{
+    const auto evaluated = driver.popConstexpr($expr);
+    if (failed(evaluated)) YYABORT;
+    $$ = {*evaluated, @expr};
+}
+                            ;
+
+const-expr-list-0           : const-expr-list-1
+                            | %empty            { $$ = {}; }
+                            ;
+
+const-expr-list-1           : const-expr-list-1[head] ',' const-expr[tail]
+                              { $$ = append(std::move($head), $tail); }
+                            | const-expr
+                              { $$ = {$1}; }
+                            ;
+
+init-spec                   : '=' const-expr[value]
+                              { $$ = /*TODO*/{}; }
+                            | %empty                { $$ = {}; }
+                            ;
+
+%%
+
+void mlir::ekl::detail::ParserImpl::error(
+    const location_type &location,
+    const std::string &message
+)
+{
+    driver.emitError(location, message);
+}

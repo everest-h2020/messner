@@ -51,11 +51,28 @@ class EKL_ExpressionBase<string mnemonic, list<Trait> traits = []>
             mnemonic,
             [DeclareOpInterfaceMethods<EKL_ExpressionOp>] # traits> {
     let results = (outs EKL_ExpressionType:$result);
+
+    let builders = [
+        OpBuilder<(ins
+                "ValueRange":$operands,
+                CArg<"Type", "{}">:$resultBound), [{
+            $_state.addOperands({operands});
+            $_state.addTypes({ExpressionType::get($_builder.getContext(), resultBound)});
+        }]>];
+    let skipDefaultBuilders = 1;
 }
 
 class EKL_CastBase<string name, list<Trait> traits = []>
         : EKL_ExpressionBase<name, [Pure, CastOpInterface] # traits> {
     let arguments = (ins EKL_ExpressionType:$input);
+    let builders = [
+        OpBuilder<(ins
+                "Value":$input,
+                "Type":$resultBound), [{
+            $_state.addOperands({input});
+            $_state.addTypes({ExpressionType::get($_builder.getContext(), resultBound)});
+        }]>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         custom<ExprOperand>($input, type($input))
@@ -83,6 +100,14 @@ class EKL_Operator<string name, list<Trait> traits = []>
 class EKL_UnaryOperator<string name, list<Trait> traits = []>
         : EKL_Operator<name, traits> {
     let arguments = (ins EKL_ExpressionType:$operand);
+    let builders = [
+        OpBuilder<(ins
+                "Value":$operand,
+                CArg<"Type", "{}">:$resultBound), [{
+            $_state.addOperands({operand});
+            $_state.addTypes({ExpressionType::get($_builder.getContext(), resultBound)});
+        }]>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         custom<ExprOperand>($operand, type($operand))
@@ -94,6 +119,15 @@ class EKL_UnaryOperator<string name, list<Trait> traits = []>
 class EKL_BinaryOperator<string name, list<Trait> traits = []>
         : EKL_Operator<name, traits> {
     let arguments = (ins EKL_ExpressionType:$lhs, EKL_ExpressionType:$rhs);
+    let builders = [
+        OpBuilder<(ins
+                "Value":$lhs,
+                "Value":$rhs,
+                CArg<"Type", "{}">:$resultBound), [{
+            $_state.addOperands({lhs, rhs});
+            $_state.addTypes({ExpressionType::get($_builder.getContext(), resultBound)});
+        }]>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         custom<ExprOperand>($lhs, type($lhs))```,`
@@ -137,6 +171,11 @@ def EKL_ProgramOp : EKL_Op<
     }];
 
     let regions = (region SizedRegion<1>:$body);
+    let builders = [
+        OpBuilder<(ins), [{
+            $_state.addRegion()->emplaceBlock();
+        }]>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         attr-dict-with-keyword $body
@@ -150,6 +189,72 @@ def EKL_ProgramOp : EKL_Op<
         static StringRef getDefaultDialect() {
             return EKLDialect::getDialectNamespace();
         }
+    }];
+}
+
+//===----------------------------------------------------------------------===//
+// Interoperability
+//===----------------------------------------------------------------------===//
+
+def EKL_EvalOp : EKL_Op<
+        "eval",
+        [Pure, DeclareOpInterfaceMethods<EKL_ExpressionOp>]> {
+    let summary = "Evaluates an expression to a normal MLIR value";
+    let description = [{
+        The `ekl.eval` operation allows an expression value to be converted into
+        a normal MLIR value of a specific type.
+
+        Examples:
+
+        ```
+        %q = ekl.eval %expr -> si32
+        ```
+    }];
+
+    let arguments = (ins EKL_ExpressionType:$input);
+    let results = (outs AnyType:$result);
+    let builders = [
+        OpBuilder<(ins "Value":$input, "Type":$resultType), [{
+            $_state.addOperands({input});
+            $_state.addTypes({resultType});
+        }]>];
+    let skipDefaultBuilders = 1;
+
+    let hasFolder = 1;
+
+    let assemblyFormat = [{
+        custom<ExprOperand>($input, type($input)) attr-dict `->` type($result)
+    }];
+}
+
+def EKL_DefineOp : EKL_Op<
+        "define",
+        [Pure, DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+    let summary = "Defines an expression using a normal MLIR value";
+    let description = [{
+        The `ekl.define` operation allows a normal MLIR value to be converted
+        into an expression.
+
+        Examples:
+
+        ```
+        %q = ekl.define %x : si32
+        ```
+    }];
+
+    let arguments = (ins AnyType:$input);
+    let results = (outs EKL_ExpressionType:$result);
+    let builders = [
+        OpBuilder<(ins "Value":$input), [{
+            $_state.addOperands({input});
+            $_state.addTypes({ExpressionType::get($_builder.getContext(), input.getType())});
+        }]>];
+    let skipDefaultBuilders = 1;
+
+    let hasFolder = 1;
+
+    let assemblyFormat = [{
+        $input `:` type($input) attr-dict
     }];
 }
 
@@ -188,6 +293,15 @@ def EKL_GlobalOp : EKL_SymbolBase<"global"> {
         TypeAttrOf<EKL_ABIReferenceType>:$type,
         OptionalAttr<EKL_InitializerAttr>:$initializer,
         OptionalAttr<StrAttr>:$sym_visibility);
+    let builders = [
+        OpBuilder<(ins
+                "StringRef":$name,
+                "ABIReferenceType":$type,
+                CArg<"InitializerAttr", "{}">:$initializer,
+                CArg<
+                    "SymbolTable::Visibility",
+                    "SymbolTable::Visibility::Public">:$visibility)>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         custom<SymbolDeclaration>($sym_visibility, $sym_name)
@@ -231,6 +345,8 @@ def EKL_KernelOp : EKL_SymbolBase<
     }];
 
     let regions = (region SizedRegion<1>:$body);
+    let builders = [OpBuilder<(ins "StringRef":$name)>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         $sym_name``custom<KernelBody>($body, attr-dict)
@@ -270,6 +386,12 @@ def EKL_ReadOp : EKL_StatementBase<
 
     let arguments = (ins EKL_ExpressionType:$reference);
     let results = (outs EKL_ExpressionType:$result);
+    let builders = [
+        OpBuilder<(ins "Value":$reference, CArg<"Type", "{}">:$resultBound), [{
+            $_state.addOperands({reference});
+            $_state.addTypes({ExpressionType::get($_builder.getContext(), resultBound)});
+        }]>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         custom<ExprOperand>($reference, type($reference))
@@ -296,6 +418,11 @@ def EKL_WriteOp : EKL_StatementBase<
     let arguments = (ins
         EKL_ExpressionType:$reference,
         EKL_ExpressionType:$value);
+    let builders = [
+        OpBuilder<(ins "Value":$reference, "Value":$value), [{
+            $_state.addOperands({reference, value});
+        }]>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         custom<ExprOperand>($reference, type($reference))```,`
@@ -336,6 +463,17 @@ def EKL_IfOp : EKL_ExpressionBase<
         SizedRegion<1>:$thenBranch,
         MaxSizedRegion<1>:$elseBranch);
     let results = (outs Optional<EKL_ExpressionType>:$result);
+    let builders = [
+        OpBuilder<(ins "Value":$condition), [{
+            $_state.addRegion()->emplaceBlock();
+            $_state.addRegion();
+            $_state.addOperands({condition});
+        }]>,
+        OpBuilder<(ins "Value":$condition, "Type":$resultBound), [{
+            build($_builder, $_state, condition);
+            $_state.addTypes({ExpressionType::get($_builder.getContext(), resultBound)});
+        }]>];
+    let skipDefaultBuilders = 1;
 
     let hasVerifier = 1;
 
@@ -364,6 +502,8 @@ def EKL_UnifyOp : EKL_CastBase<"unify"> {
         ekl.unify %a: si32 -> si64
         ```
     }];
+
+    let hasFolder = 1;
 }
 
 def EKL_BroadcastOp : EKL_CastBase<"bcast"> {
@@ -380,6 +520,12 @@ def EKL_BroadcastOp : EKL_CastBase<"bcast"> {
 
     let arguments = (ins EKL_ExpressionType:$input, DenseI64ArrayAttr:$extents);
     let results = (outs EKL_ExpressionType:$result);
+    let builders = [
+        OpBuilder<(ins
+                "Value":$input,
+                "ExtentRange":$extents,
+                CArg<"Type", "{}">:$resultBound)>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         custom<ExprOperand>($input, type($input))`,`
@@ -427,6 +573,8 @@ def EKL_LiteralOp : EKL_Op<
 
     let arguments = (ins EKL_LiteralAttr:$literal);
     let results = (outs EKL_ExpressionType:$result);
+    let builders = [OpBuilder<(ins "LiteralAttr":$value)>];
+    let skipDefaultBuilders = 1;
 
     let hasVerifier = 1;
     let hasFolder = 1;
@@ -466,6 +614,8 @@ def EKL_GetGlobalOp : EKL_Op<
 
     let arguments = (ins FlatSymbolRefAttr:$global_name);
     let results = (outs EKL_ExpressionType:$result);
+    let builders = [OpBuilder<(ins "GlobalOp":$global)>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         $global_name attr-dict custom<ExprResult>(type($result))
@@ -488,6 +638,16 @@ def EKL_SubscriptOp : EKL_ExpressionBase<"subscript", [Pure]> {
     let arguments = (ins
         EKL_ExpressionType:$array,
         Variadic<EKL_ExpressionType>:$subscripts);
+    let builders = [
+        OpBuilder<(ins
+                "Value":$array,
+                "ValueRange":$subscripts,
+                CArg<"Type", "{}">:$resultBound), [{
+            $_state.addOperands({array});
+            $_state.addOperands(subscripts);
+            $_state.addTypes({ExpressionType::get($_builder.getContext(), resultBound)});
+        }]>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         custom<ExprOperand>($array, type($array))
@@ -517,6 +677,11 @@ def EKL_YieldOp : EKL_Op<
     }];
 
     let arguments = (ins Optional<EKL_ExpressionType>:$value);
+    let builders = [
+        OpBuilder<(ins "Value":$value), [{
+            $_state.addOperands({value});
+        }]>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         custom<OptionalExprOperand>($value, type($value))
@@ -538,6 +703,8 @@ def EKL_StackOp : EKL_ExpressionBase<"stack", [Pure]> {
     }];
 
     let arguments = (ins Variadic<EKL_ExpressionType>:$operands);
+
+    let hasFolder = 1;
 
     let assemblyFormat = [{
         custom<ExprOperand>($operands, type($operands))
@@ -575,11 +742,60 @@ def EKL_AssocOp : EKL_ExpressionBase<
     }];
 
     let regions = (region SizedRegion<1>:$map);
+    let builders = [
+        OpBuilder<(ins CArg<"Type", "{}">:$resultBound), [{
+            $_state.addRegion()->emplaceBlock();
+            $_state.addTypes({ExpressionType::get($_builder.getContext(), resultBound)});
+        }]>];
+    let skipDefaultBuilders = 1;
+
+    let hasVerifier = 1;
+    let hasFolder = 1;
+
+    let assemblyFormat = [{
+        custom<Functor>($map)
+        attr-dict-with-keyword
+        custom<ExprResult>(type($result))
+    }];
+}
+
+def EKL_ZipOp : EKL_ExpressionBase<
+        "zip",
+        [
+            RecursiveMemoryEffects,
+            RecursivelySpeculatable,
+            SingleBlockImplicitTerminator<"ekl::YieldOp">]> {
+    let summary = "Element mapping operator";
+    let description = [{
+        The `ekl.zip` operation produces an array or scalar value by combining
+        elements of its operands.
+
+        Example:
+
+        ```
+        %q = ekl.zip (%a, %b) using (%arg0, %arg1) {
+            %0 = op_add %arg0, %arg1
+            yield %0
+        }
+        ```
+    }];
+
+    let arguments = (ins Variadic<EKL_ExpressionType>:$operands);
+    let regions = (region SizedRegion<1>:$combinator);
+    let builders = [
+        OpBuilder<(ins "ValueRange":$operands, CArg<"Type", "{}">:$resultBound)>,
+        OpBuilder<(ins
+                "ValueRange":$operands,
+                "Location":$combineLoc,
+                "OperationName":$combineOp,
+                CArg<"Type", "{}">:$resultBound)>];
+    let skipDefaultBuilders = 1;
 
     let hasVerifier = 1;
 
     let assemblyFormat = [{
-        custom<Functor>($map)
+        `(` custom<ExprOperand>($operands, type($operands)) `)`
+        `using` custom<Functor>($combinator)
         attr-dict-with-keyword
         custom<ExprResult>(type($result))
     }];
@@ -617,6 +833,13 @@ def EKL_ReduceOp : EKL_ExpressionBase<
     }];
 
     let regions = (region SizedRegion<1>:$map, SizedRegion<1>:$reduction);
+    let builders = [
+        OpBuilder<(ins CArg<"Type", "{}">:$resultBound)>,
+        OpBuilder<(ins
+                "Location":$reduceLoc,
+                "OperationName":$reduceOp,
+                CArg<"Type", "{}">:$resultBound)>];
+    let skipDefaultBuilders = 1;
 
     let hasVerifier = 1;
 
@@ -624,6 +847,44 @@ def EKL_ReduceOp : EKL_ExpressionBase<
         custom<Functor>($map)
         `using` custom<Functor>($reduction)
         attr-dict-with-keyword
+        custom<ExprResult>(type($result))
+    }];
+}
+
+def EKL_ChoiceOp : EKL_ExpressionBase<"choice", [Pure]> {
+    let summary = "Ternary operator";
+    let description = [{
+        The `ekl.choice` operator produces an array or scalar value by choosing
+        elements from its operands using the boolean condition. Only scalar
+        type alternatives may be chosen from.
+
+        Example:
+
+        ```
+        %q = ekl.choice %c then %t else %f
+        ```
+    }];
+
+    let arguments = (ins
+        EKL_ExpressionType:$condition,
+        EKL_ExpressionType:$trueValue,
+        EKL_ExpressionType:$falseValue);
+    let builders = [
+        OpBuilder<(ins
+            "Value":$condition,
+            "Value":$trueValue,
+            "Value":$falseValue,
+            CArg<"Type", "{}">:$resultBound), [{
+                $_state.addOperands({condition, trueValue, falseValue});
+                $_state.addTypes({ExpressionType::get($_builder.getContext(), resultBound)});
+            }]>];
+    let skipDefaultBuilders = 1;
+
+    let assemblyFormat = [{
+        custom<ExprOperand>($condition, type($condition))
+        `then` custom<ExprOperand>($trueValue, type($trueValue))
+        `else` custom<ExprOperand>($falseValue, type($falseValue))
+        attr-dict
         custom<ExprResult>(type($result))
     }];
 }
@@ -638,6 +899,13 @@ def EKL_CompareOp : EKL_BinaryOperator<"cmp"> {
         EKL_RelationKind:$kind,
         EKL_ExpressionType:$lhs,
         EKL_ExpressionType:$rhs);
+    let builders = [
+        OpBuilder<(ins
+                "RelationKind":$kind,
+                "Value":$lhs,
+                "Value":$rhs,
+                CArg<"Type", "{}">:$resultBound)>];
+    let skipDefaultBuilders = 1;
 
     let assemblyFormat = [{
         $kind
@@ -646,6 +914,14 @@ def EKL_CompareOp : EKL_BinaryOperator<"cmp"> {
         attr-dict
         custom<ExprResult>(type($result))
     }];
+}
+
+def EKL_MinOp : EKL_BinaryOperator<"min"> {
+    let summary = "Minimum operator";
+}
+
+def EKL_MaxOp : EKL_BinaryOperator<"max"> {
+    let summary = "Maximum operator";
 }
 
 //===----------------------------------------------------------------------===//

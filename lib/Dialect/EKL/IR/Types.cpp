@@ -281,6 +281,10 @@ Type EKLDialect::parseType(DialectAsmParser &parser) const
         return IdentityType::get(parser.getContext());
     if (!parser.parseOptionalStar())
         return ExtentType::get(parser.getContext());
+    if (!parser.parseOptionalEllipsis())
+        return EllipsisType::get(parser.getContext());
+    if (!parser.parseOptionalQuestion())
+        return ErrorType::get(parser.getContext());
 
     StringRef keyword;
     Type result;
@@ -312,6 +316,14 @@ void EKLDialect::printType(Type type, DialectAsmPrinter &os) const
     }
     if (llvm::isa<ExtentType>(type)) {
         os << "*";
+        return;
+    }
+    if (llvm::isa<EllipsisType>(type)) {
+        os << "...";
+        return;
+    }
+    if (llvm::isa<ErrorType>(type)) {
+        os << "?";
         return;
     }
     if (const auto indexTy = llvm::dyn_cast<IndexType>(type)) {

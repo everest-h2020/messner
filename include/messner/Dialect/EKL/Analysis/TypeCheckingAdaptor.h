@@ -278,12 +278,12 @@ struct TypeCheckingAdaptor : AbstractTypeChecker {
 
     Contradiction broadcastAndUnify(ValueRange exprs, Type &result) const;
 
-private:
     InFlightDiagnostic emitError() const
     {
         return mlir::emitError(getParent().getLoc());
     }
 
+private:
     Contradiction unifyImpl(SmallVectorImpl<Type> &types, Type &result) const;
 
     AbstractTypeChecker &m_impl;

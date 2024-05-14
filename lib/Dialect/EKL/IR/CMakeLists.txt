@@ -1,6 +1,7 @@
 add_mlir_dialect_library(EKLDialect
         Attributes.cpp
         Base.cpp
+        DiagHandler.cpp
         Ops.cpp
         Types.cpp
 
@@ -11,7 +12,9 @@ add_mlir_dialect_library(EKLDialect
         MLIRIR
         MLIRParser
         MLIRSideEffectInterfaces
-        MessnerDialectUtils
+        MLIRArithDialect
+        MLIRMathDialect
+        MLIRTensorDialect
         EKLEnums
         EKLAnalysis
         EKLInterfaces

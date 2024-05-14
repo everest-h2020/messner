@@ -1,2 +1,3 @@
 // RUN: evp-translate --help | FileCheck %s
-// CHECK: General options:
+// CHECK: Translations to perform
+// CHECK-DAG: --import-ekl

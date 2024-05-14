@@ -350,6 +350,46 @@ def EKL_ExtentType : EKL_Type<"Extent"> {
     }];
 }
 
+def EKL_EllipsisType : EKL_Type<"Ellipsis"> {
+    let mnemonic = "ellipsis";
+    let summary = "Type of the ellipsis literal";
+    let description = [{
+        The `ekl.ellipsis` type is the type of the `...` literal, which expands
+        to indentity indexers in a subscript expression.
+
+        Example:
+
+        ```
+        !ekl.ellipsis
+        !ekl<...>
+        ```
+    }];
+
+    code builderCall = [{
+        ::mlir::ekl::EllipsisType::get($_builder.getContext());
+    }];
+}
+
+def EKL_ErrorType : EKL_Type<"Error"> {
+    let mnemonic = "error";
+    let summary = "Type of the error literal";
+    let description = [{
+        The `ekl.error` type is the type of the `?` literal, which is the result
+        of an erroneous expression.
+
+        Example:
+
+        ```
+        !ekl.error
+        !ekl<?>
+        ```
+    }];
+
+    code builderCall = [{
+        ::mlir::ekl::ErrorType::get($_builder.getContext());
+    }];
+}
+
 //===----------------------------------------------------------------------===//
 // Named constraints
 //===----------------------------------------------------------------------===//
@@ -430,6 +470,8 @@ def EKL_LiteralType : Type<
             - ArrayType
             - IdentityType
             - ExtentType
+            - EllipsisType
+            - ErrorType
     }];
 }
 

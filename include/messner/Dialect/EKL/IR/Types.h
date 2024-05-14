@@ -59,6 +59,8 @@ class ArrayType;
 class ReferenceType;
 class IdentityType;
 class ExtentType;
+class EllipsisType;
+class ErrorType;
 
 //===----------------------------------------------------------------------===//
 // Named constraints
@@ -233,6 +235,10 @@ struct LiteralType : Type {
     [[nodiscard]] static bool classof(IdentityType);
     /// @copydoc classof(Type)
     [[nodiscard]] static bool classof(ExtentType);
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(EllipsisType);
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(ErrorType);
     /// Determines whether @p type is a LiteralType.
     ///
     /// @pre    `type`
@@ -245,6 +251,8 @@ struct LiteralType : Type {
     /*implicit*/ LiteralType(ArrayType);
     /*implicit*/ LiteralType(IdentityType);
     /*implicit*/ LiteralType(ExtentType);
+    /*implicit*/ LiteralType(EllipsisType);
+    /*implicit*/ LiteralType(ErrorType);
 };
 
 //===----------------------------------------------------------------------===//
@@ -359,6 +367,10 @@ inline bool LiteralType::classof(IdentityType) { return true; }
 
 inline bool LiteralType::classof(ExtentType) { return true; }
 
+inline bool LiteralType::classof(EllipsisType) { return true; }
+
+inline bool LiteralType::classof(ErrorType) { return true; }
+
 inline bool LiteralType::classof(Type type)
 {
     return llvm::TypeSwitch<Type, bool>(type)
@@ -367,6 +379,8 @@ inline bool LiteralType::classof(Type type)
         .Case([](ArrayType) { return true; })
         .Case([](IdentityType) { return true; })
         .Case([](ExtentType) { return true; })
+        .Case([](EllipsisType) { return true; })
+        .Case([](ErrorType) { return true; })
         .Default(false);
 }
 
@@ -383,6 +397,14 @@ inline LiteralType::LiteralType(IdentityType type)
 {}
 
 inline LiteralType::LiteralType(ExtentType type)
+        : Type(static_cast<Type>(type).getImpl())
+{}
+
+inline LiteralType::LiteralType(EllipsisType type)
+        : Type(static_cast<Type>(type).getImpl())
+{}
+
+inline LiteralType::LiteralType(ErrorType type)
         : Type(static_cast<Type>(type).getImpl())
 {}
 

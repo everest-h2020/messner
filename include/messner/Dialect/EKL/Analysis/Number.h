@@ -7,6 +7,7 @@
 
 #include "mlir/IR/DialectImplementation.h"
 
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/Hashing.h"
 
@@ -120,14 +121,28 @@ struct Number {
         m_mantissa        = getMantissa(m);
         m_exponent        = e;
     }
+    /// Initializes a Number from an llvm::APFloat.
+    ///
+    /// @pre    `value.isIEEE() && value.isFinite()`
+    /*implicit*/ Number(llvm::APFloat value);
+    /// @copydoc Number(mantissa_t, exponent_t)
+    /*implicit*/ Number(const llvm::APSInt &mantissa, exponent_t exponent = 0)
+            : Number(static_cast<const llvm::APInt &>(mantissa), exponent)
+    {
+        // Ensure the sign is preserved.
+        if (mantissa.isUnsigned() && getMantissa().isNegative())
+            m_mantissa = m_mantissa.zext(m_mantissa.getBitWidth() + 1U);
+    }
     /// Initializes a Number from @p mantissa and @p exponent .
     ///
     /// @post   `getMantissa() == mantissa`
     /// @post   `getExponent() == exponent`
-    /*implicit*/ Number(mantissa_t mantissa, exponent_t exponent = 0)
+    /*implicit*/ Number(const mantissa_t &mantissa, exponent_t exponent = 0)
             : m_mantissa(mantissa),
               m_exponent(exponent)
-    {}
+    {
+        reduce();
+    }
     /// Initializes a Number of value 0.
     ///
     /// @post   `*this == 0`
@@ -186,6 +201,15 @@ struct Number {
         if (getMantissa().isNegative()) return -1;
         return getMantissa().isZero() ? 0 : 1;
     }
+
+    /// Converts the contained value to an llvm::APFloat with @p semantics .
+    ///
+    /// Applies to-odd rounding and saturates to next finite value when needed.
+    ///
+    /// @param  [in]        semantics llvm::fltSemantics
+    ///
+    /// @return APFloat
+    APFloat toAPFloatWithRounding(llvm::fltSemantics &semantics) const;
 
     /// Tries to get the contained value as an uword_t, if it fits.
     [[nodiscard]] std::optional<uword_t> tryGetUInt() const;

@@ -131,30 +131,32 @@ LogicalResult TypeChecker::meetBound(Expression expr, Type incoming)
 }
 
 //===----------------------------------------------------------------------===//
-// TypeCheckPass implementation
+// typeCheck implementation
 //===----------------------------------------------------------------------===//
 
-void TypeCheckPass::runOnOperation()
+LogicalResult mlir::ekl::typeCheck(Operation *root)
 {
+    assert(root);
+
     TypeChecker typeChecker;
 
     // Put the kernel on the diagnostic stack.
     ScopedDiagnosticHandler kernelNote(
-        &getContext(),
+        root->getContext(),
         [&](Diagnostic &diag) -> LogicalResult {
-            diag.attachNote(getOperation().getLoc())
-                << "while type checking this kernel";
+            diag.attachNote(root->getLoc())
+                << "while type checking this operation";
             return failure();
         });
 
     // Work is initialized by recursively invalidating all expressions.
-    typeChecker.recursivelyInvalidate(getOperation());
+    typeChecker.recursivelyInvalidate(root);
 
     // Continue refining type bounds until a fixpoint is reached.
     while (auto expr = typeChecker.popInvalid()) {
         // Put the expression on the diagnostic stack.
         ScopedDiagnosticHandler handler(
-            &getContext(),
+            root->getContext(),
             [&](Diagnostic &diag) -> LogicalResult {
                 diag.attachNote(expr.getLoc())
                     << "while type checking this expression";
@@ -162,14 +164,21 @@ void TypeCheckPass::runOnOperation()
             });
 
         LLVM_DEBUG(llvm::dbgs() << "[TypeChecker] checking " << expr << "\n");
-        if (failed(expr.typeCheck(typeChecker))) {
-            signalPassFailure();
-            return;
-        }
+        if (failed(expr.typeCheck(typeChecker))) return failure();
     }
 
     // Apply the deductions to the IR.
     typeChecker.applyToIR();
+    return success();
+}
+
+//===----------------------------------------------------------------------===//
+// TypeCheckPass implementation
+//===----------------------------------------------------------------------===//
+
+void TypeCheckPass::runOnOperation()
+{
+    if (failed(typeCheck(getOperation()))) signalPassFailure();
 }
 
 std::unique_ptr<Pass> mlir::ekl::createTypeCheckPass()
