@@ -6,7 +6,7 @@
 #pragma once
 
 #include "messner/Dialect/EKL/IR/Attributes.h"
-#include "messner/Dialect/EKL/Interfaces/ExpressionOp.h"
+#include "messner/Dialect/EKL/Interfaces/TypeCheckOpInterface.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/RegionKindInterface.h"

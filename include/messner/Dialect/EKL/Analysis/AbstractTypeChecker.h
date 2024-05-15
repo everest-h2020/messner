@@ -108,7 +108,7 @@ isSubtype(ekl::IntegerType subtype, ekl::IntegerType supertype);
 //===----------------------------------------------------------------------===//
 //
 // The base class for implementing concrete type checkers, which is passed to
-// ExpressionOp consumers via the typeCheck method.
+// TypeCheckOpInterface consumers via the typeCheck method.
 
 /// Type of a value that supports type checking.
 using Expression = TypedValue<ExpressionType>;
@@ -170,9 +170,9 @@ enum class RefinementResult {
 
 /// Abstract base class for the EKL type checker.
 ///
-/// The EKL type checker tries to annotate every ExpressionOp in an EKL kernel
-/// program with concrete types. It does this by computing the most restrictive
-/// bounds on all expression values, without modifying the IR.
+/// The EKL type checker tries to annotate every TypeCheckOpInterface in an EKL
+/// kernel program with concrete types. It does this by computing the most
+/// restrictive bounds on all expression values, without modifying the IR.
 struct AbstractTypeChecker {
     virtual ~AbstractTypeChecker();
 

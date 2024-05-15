@@ -6,7 +6,7 @@
 #pragma once
 
 #include "messner/Dialect/EKL/Analysis/Casting.h"
-#include "messner/Dialect/EKL/Interfaces/ExpressionOp.h"
+#include "messner/Dialect/EKL/Interfaces/TypeCheckOpInterface.h"
 
 #include <optional>
 
@@ -142,14 +142,17 @@ private:
     }
 };
 
-/// Provides an adaptor around an AbstractTypeChecker for an ExpressionOp.
+/// Provides an adaptor around an AbstractTypeChecker bound to some
+/// TypeCheckOpInterface.
 ///
 /// The adaptor defines some convenience methods to perform common type checking
 /// tasks on an operation, which automatically generate error diagnostics when
 /// necessary.
 struct TypeCheckingAdaptor : AbstractTypeChecker {
     /// Initializes a TypeCheckingAdaptor using @p impl for @p parent .
-    explicit TypeCheckingAdaptor(AbstractTypeChecker &impl, ExpressionOp parent)
+    explicit TypeCheckingAdaptor(
+        AbstractTypeChecker &impl,
+        TypeCheckOpInterface parent)
             : m_impl(impl),
               m_parent(parent)
     {}
@@ -159,7 +162,7 @@ struct TypeCheckingAdaptor : AbstractTypeChecker {
     /// Gets the AbstractTypeChecker.
     [[nodiscard]] const AbstractTypeChecker &getImpl() const { return m_impl; }
     /// Gets the parent operation
-    [[nodiscard]] ExpressionOp getParent() const { return m_parent; }
+    [[nodiscard]] TypeCheckOpInterface getParent() const { return m_parent; }
 
     /// @copydoc AbstractTypeChecker::getType(Expression)
     [[nodiscard]] virtual Type getType(Expression expr) const override
@@ -287,7 +290,7 @@ private:
     Contradiction unifyImpl(SmallVectorImpl<Type> &types, Type &result) const;
 
     AbstractTypeChecker &m_impl;
-    ExpressionOp m_parent;
+    TypeCheckOpInterface m_parent;
 };
 
 } // namespace mlir::ekl

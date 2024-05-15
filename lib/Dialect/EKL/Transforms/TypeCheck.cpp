@@ -42,7 +42,7 @@ struct TypeChecker : AbstractTypeChecker {
 
     virtual void invalidate(Operation *op) override
     {
-        const auto expr = llvm::dyn_cast<ExpressionOp>(op);
+        const auto expr = llvm::dyn_cast<TypeCheckOpInterface>(op);
         if (!expr) return;
 
         const auto [it, ok] = m_invalid.insert(expr);
@@ -51,7 +51,7 @@ struct TypeChecker : AbstractTypeChecker {
                 llvm::dbgs() << "[TypeChecker] invalidated " << expr << "\n");
     }
 
-    ExpressionOp popInvalid()
+    TypeCheckOpInterface popInvalid()
     {
         const auto it = m_invalid.begin();
         if (it == m_invalid.end()) return nullptr;
@@ -76,7 +76,7 @@ struct TypeChecker : AbstractTypeChecker {
 
 private:
     llvm::DenseMap<Expression, Type> m_context;
-    llvm::DenseSet<ExpressionOp> m_invalid;
+    llvm::DenseSet<TypeCheckOpInterface> m_invalid;
 };
 
 struct TypeCheckPass : ekl::impl::TypeCheckBase<TypeCheckPass> {

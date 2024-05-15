@@ -5,11 +5,11 @@
 
 #pragma once
 
-#include "messner/Dialect/EKL/Interfaces/ExpressionOp.h"
+#include "messner/Dialect/EKL/Interfaces/TypeCheckOpInterface.h"
 
 namespace mlir::ekl {
 
-/// Implements an AbstractTypeChecker that locally verifies an ExpressionOp.
+/// Implements an AbstractTypeChecker that locally invokes TypeCheckOpInterface.
 ///
 /// Instead of accumulating any type bounds, the LocalTypeChecker only verifies
 /// that the bounds deduced by the operation are subtypes of the result types
@@ -18,15 +18,15 @@ struct LocalTypeChecker final : AbstractTypeChecker {
     /// Initializes a LocalTypeChecker for @p parent .
     ///
     /// @pre    `parent`
-    explicit LocalTypeChecker(ExpressionOp parent) : m_parent(parent)
+    explicit LocalTypeChecker(TypeCheckOpInterface parent) : m_parent(parent)
     {
         assert(parent);
     }
 
-    /// Gets the parent ExpressionOp.
+    /// Gets the parent TypeCheckOpInterface.
     ///
     /// @post   `result`
-    [[nodiscard]] ExpressionOp getParent() const { return m_parent; }
+    [[nodiscard]] TypeCheckOpInterface getParent() const { return m_parent; }
 
     /// Gets the type bound on @p expr that's in the IR.
     virtual Type getType(Expression expr) const override
@@ -35,12 +35,10 @@ struct LocalTypeChecker final : AbstractTypeChecker {
     }
 
     /// Verifies that @p incoming is a legal refinement of @p expr .
-    virtual LogicalResult
-    refineBound(Expression expr, Type incoming) override;
+    virtual LogicalResult refineBound(Expression expr, Type incoming) override;
 
     /// Verifies that @p incoming legally meets with @p expr .
-    virtual LogicalResult
-    meetBound(Expression expr, Type incoming) override;
+    virtual LogicalResult meetBound(Expression expr, Type incoming) override;
 
 private:
     /// Generates a diagnostic for @p expr .
@@ -50,7 +48,7 @@ private:
     /// @return (diagnostic, isError)
     std::pair<InFlightDiagnostic, bool> report(Expression expr) const;
 
-    ExpressionOp m_parent;
+    TypeCheckOpInterface m_parent;
 };
 
 } // namespace mlir::ekl

@@ -1,4 +1,4 @@
-/// Declares the EKL ExpressionOp interface.
+/// Declares the EKL TypeCheckOpInterface.
 ///
 /// @file
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
@@ -13,19 +13,19 @@
 
 #include <utility>
 
-namespace mlir::ekl::detail {
+namespace mlir::ekl::impl {
 
-/// Checks that @p op verifies according to ExpresionOp::verifyUses.
+/// Uses a LocalTypeChecker to determine whether @p op is valid.
 ///
 /// @param  [in]        op              Operation to verify.
 ///
 /// @return Whether verification succeeded.
-LogicalResult verifyExpressionOp(Operation *op);
+LogicalResult verifyTypeCheckOpInterface(Operation *op);
 
-} // namespace mlir::ekl::detail
+} // namespace mlir::ekl::impl
 
 //===- Generated includes -------------------------------------------------===//
 
-#include "messner/Dialect/EKL/Interfaces/ExpressionOp.h.inc"
+#include "messner/Dialect/EKL/Interfaces/TypeCheckOpInterface.h.inc"
 
 //===----------------------------------------------------------------------===//

@@ -58,7 +58,7 @@ static void printSymbolDeclaration(
 static ParseResult
 parseKernelBody(OpAsmParser &parser, Region &body, NamedAttrList &attributes)
 {
-    // `(` [ ssa-id [ `:` type ] { `,` ssa-id [ `:` type ] } ] `)`
+    // `(` [ block-arg { `,` block-arg } ] `)`
     SmallVector<OpAsmParser::Argument> arguments;
     if (parser
             .parseArgumentList(arguments, OpAsmParser::Delimiter::Paren, true))
@@ -85,14 +85,16 @@ static void printKernelBody(
     Region &body,
     DictionaryAttr attributes)
 {
-    // `(` [ ssa-id [ `:` type ] { `,` ssa-id [ `:` type ] } ] `)`
+    // `(` [ block-arg { `,` block-arg } ] `)`
     printer << "(";
     llvm::interleaveComma(
         body.getArguments(),
         printer,
         [&](BlockArgument &arg) {
+            // block-arg ::= ssa-id [ `:` type ] [ `loc` `(` loc `)` ]
             printer << arg << ": "
                     << llvm::cast<ExpressionType>(arg.getType()).getTypeBound();
+            printer.printOptionalLocationSpecifier(arg.getLoc());
         });
     printer << ")";
 
@@ -262,7 +264,10 @@ static ParseResult parseFunctor(OpAsmParser &parser, Region &body)
                 }
                 arguments.back().type =
                     ExpressionType::get(parser.getContext(), argTy);
-                return success();
+
+                // [ `loc` `(` loc `)` ]
+                return parser.parseOptionalLocationSpecifier(
+                    arguments.back().sourceLoc);
             }))
         return failure();
 

@@ -29,10 +29,9 @@ def EKL_ExpressionType : EKL_Type<"Expression"> {
         a subtype of the type bound.
 
         Operations that accept or produce values of this type should implement
-        the `ExpressionOp` interface to participate in type checking. During
-        that process, the types of value definitions may be updated by the type
-        checker, which goes against usual MLIR procedures. Note that consenting
-        users may also accept a change to an unrelated type.
+        the `TypeCheckOpInterface` interface to participate in type checking.
+        During that process, the types of value definitions may be updated by
+        the type checker, which goes against usual MLIR procedures.
 
         Examples:
 

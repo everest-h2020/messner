@@ -47,12 +47,12 @@ def EKL_ReferenceKind : I64BitEnumAttr<
 // RelationKind
 //===----------------------------------------------------------------------===//
 
-def EKL_Equivalent     : I64BitEnumAttrCaseBit<"Equivalent", 0b001, "eq">;
-def EKL_LessThan       : I64BitEnumAttrCaseBit<"LessThan", 0b010, "lt">;
-def EKL_LessOrEqual    : I64BitEnumAttrCaseBit<"LessOrEqual", 0b011, "le">;
-def EKL_GreaterThan    : I64BitEnumAttrCaseBit<"GreaterThan", 0b100, "gt">;
-def EKL_GreaterOrEqual : I64BitEnumAttrCaseBit<"GreaterOrEqual", 0b101, "ge">;
-def EKL_Antivalent     : I64BitEnumAttrCaseBit<"Antivalent", 0b110, "ne">;
+def EKL_Equivalent     : I64BitEnumAttrCase<"Equivalent",     0b001, "eq">;
+def EKL_LessThan       : I64BitEnumAttrCase<"LessThan",       0b010, "lt">;
+def EKL_LessOrEqual    : I64BitEnumAttrCase<"LessOrEqual",    0b011, "le">;
+def EKL_GreaterThan    : I64BitEnumAttrCase<"GreaterThan",    0b100, "gt">;
+def EKL_GreaterOrEqual : I64BitEnumAttrCase<"GreaterOrEqual", 0b101, "ge">;
+def EKL_Antivalent     : I64BitEnumAttrCase<"Antivalent",     0b110, "ne">;
 
 def EKL_RelationKind : I64BitEnumAttr<
         "RelationKind",

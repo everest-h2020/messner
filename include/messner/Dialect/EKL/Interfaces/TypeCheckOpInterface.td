@@ -1,20 +1,19 @@
-//===- ExpressionOp.td -------------------------------------*- tablegen -*-===//
+//===- TypeCheckOpInterface.td -----------------------------*- tablegen -*-===//
 //
-// This is the definitions file for the EKL ExpressionOp interface.
+// This is the definitions file for the EKL TypeCheckOpInterface.
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef EKL_EXPRESSIONOP
-#define EKL_EXPRESSIONOP
+#ifndef EKL_TYPECHECKOPINTERFACE
+#define EKL_TYPECHECKOPINTERFACE
 
 include "mlir/IR/OpBase.td"
 
-def EKL_ExpressionOp : OpInterface<"ExpressionOp"> {
+def EKL_TypeCheckOpInterface : OpInterface<"TypeCheckOpInterface"> {
     let cppNamespace = "::mlir::ekl";
 
     let description = [{
-        Interface for an operation that consumes and/or produces EKL
-        expressions.
+        Interface for an operation that participates in late type checking.
 
         Since EKL programs are subject to late type checking, the type (bounds)
         of expressions may change in the IR. This happens during an inference
@@ -44,9 +43,7 @@ def EKL_ExpressionOp : OpInterface<"ExpressionOp"> {
             /*methodBody=*/"",
             /*defaultImplementation=*/"">];
 
-    let verify = [{
-        return detail::verifyExpressionOp($_op);
-    }];
+    let verify = [{ return impl::verifyTypeCheckOpInterface($_op); }];
 }
 
 #endif

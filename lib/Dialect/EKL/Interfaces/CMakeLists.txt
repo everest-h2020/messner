@@ -1,6 +1,6 @@
 add_mlir_library(EKLInterfaces
         ContiguousType.cpp
-        ExpressionOp.cpp
+        TypeCheckOpInterface.cpp
 
     ENABLE_AGGREGATION
     DEPENDS

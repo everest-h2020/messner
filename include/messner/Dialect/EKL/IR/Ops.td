@@ -8,7 +8,7 @@
 #define EKL_OPS
 
 include "messner/Dialect/EKL/IR/Attributes.td"
-include "messner/Dialect/EKL/Interfaces/ExpressionOp.td"
+include "messner/Dialect/EKL/Interfaces/TypeCheckOpInterface.td"
 include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/RegionKindInterface.td"
 include "mlir/IR/SymbolInterfaces.td"
@@ -49,7 +49,7 @@ class EKL_StatementBase<string mnemonic, list<Trait> traits = []>
 class EKL_ExpressionBase<string mnemonic, list<Trait> traits = []>
         : EKL_StatementBase<
             mnemonic,
-            [DeclareOpInterfaceMethods<EKL_ExpressionOp>] # traits> {
+            [DeclareOpInterfaceMethods<EKL_TypeCheckOpInterface>] # traits> {
     let results = (outs EKL_ExpressionType:$result);
 
     let builders = [
@@ -198,7 +198,7 @@ def EKL_ProgramOp : EKL_Op<
 
 def EKL_EvalOp : EKL_Op<
         "eval",
-        [Pure, DeclareOpInterfaceMethods<EKL_ExpressionOp>]> {
+        [Pure, DeclareOpInterfaceMethods<EKL_TypeCheckOpInterface>]> {
     let summary = "Evaluates an expression to a normal MLIR value";
     let description = [{
         The `ekl.eval` operation allows an expression value to be converted into
@@ -265,7 +265,7 @@ def EKL_ConstexprOp : EKL_Op<
             IsolatedFromAbove,
             NoRegionArguments,
             SingleBlockImplicitTerminator<"ekl::YieldOp">,
-            DeclareOpInterfaceMethods<EKL_ExpressionOp>,
+            DeclareOpInterfaceMethods<EKL_TypeCheckOpInterface>,
             OpAsmOpInterface]> {
     let summary = "Establishes a context for constant expression evaluation";
     let description = [{
@@ -427,7 +427,7 @@ def EKL_KernelOp : EKL_SymbolBase<
 
 def EKL_ReadOp : EKL_StatementBase<
         "read",
-        [Pure, DeclareOpInterfaceMethods<EKL_ExpressionOp>]> {
+        [Pure, DeclareOpInterfaceMethods<EKL_TypeCheckOpInterface>]> {
     let summary = "Dereferences a reference to obtain its value";
     let description = [{
         The `ekl.read` operation reads a value from a location indicated by a
@@ -458,7 +458,7 @@ def EKL_ReadOp : EKL_StatementBase<
 
 def EKL_WriteOp : EKL_StatementBase<
         "write",
-        [DeclareOpInterfaceMethods<EKL_ExpressionOp>]> {
+        [DeclareOpInterfaceMethods<EKL_TypeCheckOpInterface>]> {
     let summary = "Dereferences a reference to update its value";
     let description = [{
         The `ekl.write` operation writes a value to a location indicated by a
@@ -493,7 +493,7 @@ def EKL_IfOp : EKL_ExpressionBase<
             RecursiveMemoryEffects,
             RecursivelySpeculatable,
             SingleBlockImplicitTerminator<"ekl::YieldOp">,
-            DeclareOpInterfaceMethods<EKL_ExpressionOp>]> {
+            DeclareOpInterfaceMethods<EKL_TypeCheckOpInterface>]> {
     let summary = "Conditionally evaluates statements and expressions";
     let description = [{
         The `ekl.if` operation allows conditionally executing a statement or
@@ -717,7 +717,10 @@ def EKL_SubscriptOp : EKL_ExpressionBase<"subscript", [Pure]> {
 
 def EKL_YieldOp : EKL_Op<
         "yield",
-        [Pure, Terminator, DeclareOpInterfaceMethods<EKL_ExpressionOp>]> {
+        [
+            Pure,
+            Terminator,
+            DeclareOpInterfaceMethods<EKL_TypeCheckOpInterface>]> {
     let summary = "Region terminator for scopes";
     let description = [{
         The `ekl.yield` operation terminates EKL expression scopes that yield
