@@ -722,11 +722,10 @@ LogicalResult IfOp::typeCheck(AbstractTypeChecker &typeChecker)
 [[nodiscard]] static ekl::ArrayAttr unify(LiteralAttr input, ArrayType output)
 {
     return llvm::TypeSwitch<LiteralAttr, ekl::ArrayAttr>(input)
-        .Case([&](ScalarAttr attr) {
-            return ekl::ArrayAttr::get(output, {attr});
-        })
+        .Case(
+            [&](ScalarAttr attr) { return ekl::ArrayAttr::get(output, attr); })
         .Case([&](ekl::ArrayAttr attr) {
-            return ekl::ArrayAttr::get(output, attr.getFlattened());
+            return ekl::ArrayAttr::get(output, attr.getStack());
         })
         .Default(ekl::ArrayAttr{});
 }
@@ -1112,28 +1111,9 @@ OpFoldResult StackOp::fold(StackOp::FoldAdaptor adaptor)
     const auto arrayTy =
         llvm::dyn_cast_if_present<ArrayType>(getTypeBound(getType()));
     if (!arrayTy) return {};
+    if (llvm::count(adaptor.getOperands(), Attribute{}) > 0) return {};
 
-    SmallVector<Attribute> flattened;
-    for (auto op : adaptor.getOperands()) {
-        if (const auto attr = llvm::dyn_cast_if_present<ScalarAttr>(op)) {
-            flattened.push_back(attr);
-            continue;
-        }
-        if (const auto attr = llvm::dyn_cast_if_present<ekl::ArrayAttr>(op)) {
-            if (attr.isSplat())
-                flattened.append(
-                    *attr.getType().getNumElements(),
-                    attr.getSplatValue());
-            else
-                flattened.append(
-                    attr.getFlattened().begin(),
-                    attr.getFlattened().end());
-            continue;
-        }
-        return {};
-    }
-
-    return ekl::ArrayAttr::get(arrayTy, flattened);
+    return ekl::ArrayAttr::get(arrayTy, adaptor.getOperands());
 }
 
 LogicalResult StackOp::typeCheck(AbstractTypeChecker &typeChecker)
@@ -1211,10 +1191,9 @@ OpFoldResult AssocOp::fold(AssocOp::FoldAdaptor)
     if (getMap().getNumArguments() == 0) return value;
 
     // Otherwise, we must have yielded a scalar, which we can make a splat of.
-    const auto splatValue = llvm::cast<ScalarAttr>(value);
     return ekl::ArrayAttr::get(
         llvm::cast<ArrayType>(getType().getTypeBound()),
-        {splatValue});
+        llvm::cast<ScalarAttr>(value));
 }
 
 LogicalResult AssocOp::typeCheck(AbstractTypeChecker &typeChecker)

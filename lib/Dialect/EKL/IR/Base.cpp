@@ -36,7 +36,7 @@ struct EKLAsmInterface : OpAsmDialectInterface {
         // to a non-deferred alias.
         return llvm::TypeSwitch<Attribute, AliasResult>(attr)
             .Case([&](ekl::ArrayAttr arrayAttr) {
-                if (arrayAttr.getFlattened().size() <= kInlineArrayLength)
+                if (arrayAttr.getStack().size() <= kInlineArrayLength)
                     return AliasResult::NoAlias;
 
                 os << "array";

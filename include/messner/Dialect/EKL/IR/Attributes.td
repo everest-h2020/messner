@@ -94,68 +94,96 @@ def EKL_ArrayAttr : EKL_Attr<"Array", [TypedAttrInterface]> {
     let description = [{
         The `ekl.array` attribute holds a value of an ArrayType.
 
-        The storage of the `ekl.array` attribute is very inefficient (it uses
-        `mlir::ArrayAttr`), but covariant. It also supports a splat
-        representation, where only one value is stored, and repeated for the
-        entire domain.
-
         Examples:
 
         ```
-        #ekl.array<[1 : si32]> : !ekl.array<si32>
-        #ekl.array<[0 : ui4, -1 : si2, 2.0 : f32, #ekl.index<2>]>
-            : !ekl.array<!ekl.number [2, 2]>
-
-        #ekl.array<[0.0 : f64]> : !ekl.array<f64 [100, 100]>
         ```
     }];
 
     let parameters = (ins
         AttributeSelfTypeParameter<"", "ArrayType">:$arrayType,
-        "mlir::ArrayAttr":$flattened);
+        "mlir::ArrayAttr":$stack);
 
     let builders = [
         AttrBuilderWithInferredContext<(ins
                 "ArrayType":$arrayType,
-                "mlir::ArrayAttr":$flattened), [{
-            assert(arrayType);
-            return $_get(arrayType.getContext(), arrayType, flattened);
+                "mlir::ArrayAttr":$stack), [{
+            return $_get(arrayType.getContext(), arrayType, stack);
         }]>,
         AttrBuilderWithInferredContext<(ins
                 "ArrayType":$arrayType,
-                "ArrayRef<Attribute>":$flattened), [{
-            assert(arrayType);
+                "mlir::ArrayAttr::ValueType":$stack), [{
             return $_get(
                 arrayType.getContext(),
                 arrayType,
-                mlir::ArrayAttr::get(arrayType.getContext(), flattened));
+                mlir::ArrayAttr::get(arrayType.getContext(), stack));
+        }]>,
+        AttrBuilderWithInferredContext<(ins
+                "ArrayType":$arrayType,
+                "ScalarAttr":$splatValue), [{
+            return $_get(
+                arrayType.getContext(),
+                arrayType,
+                mlir::ArrayAttr::get(arrayType.getContext(), {splatValue}));
+        }]>,
+        AttrBuilderWithInferredContext<(ins
+                "extent_t":$extent,
+                "ScalarAttr":$splatValue), [{
+            return $_get(
+                splatValue.getContext(),
+                ArrayType::get(
+                    splatValue.getContext(),
+                    splatValue.getType(),
+                    {extent}),
+                mlir::ArrayAttr::get(splatValue.getContext(), {splatValue}));
+        }]>,
+        AttrBuilderWithInferredContext<(ins
+                "extent_t":$extent,
+                "ArrayAttr":$splatValue), [{
+            return $_get(
+                splatValue.getContext(),
+                splatValue.getType().cloneWith(
+                    concat({extent}, splatValue.getType().getExtents())),
+                mlir::ArrayAttr::get(splatValue.getContext(), {splatValue}));
         }]>];
+    let skipDefaultBuilders = 1;
 
-    let assemblyFormat = [{
-        `<` $flattened `>`
-    }];
+    let assemblyFormat = [{ `<` $stack `>` }];
     let genVerifyDecl = 1;
 
     code extraClassDeclaration = [{
+        /// Determines whether the value is stored as a broadcast.
+        [[nodiscard]] bool isBroadcast() const
+        {
+            return getStack().size() == 1;
+        }
+        /// Obtains the stored broadcast value, if any.
+        [[nodiscard]] Attribute getBroadcastValue() const
+        {
+            return isBroadcast() ? *getStack().begin() : Attribute{};
+        }
+
         /// Determines whether the value is stored as a splat.
         [[nodiscard]] bool isSplat() const
         {
-            return getFlattened().size() == 1;
+            return !!getSplatValue();
         }
         /// Obtains the stored splat value, if any.
-        [[nodiscard]] Attribute getSplatValue() const
+        [[nodiscard]] ScalarAttr getSplatValue() const
         {
-            return isSplat() ? getFlattened().getValue().front() : Attribute{};
+            return llvm::dyn_cast_if_present<ScalarAttr>(getBroadcastValue());
         }
+
+        /// Applies a basic (partial) index subscript to this array.
+        ///
+        /// @pre    `getType().isInBounds(indices)`
+        [[nodiscard]] Attribute subscript(ExtentRange indices) const;
 
         //===--------------------------------------------------------------===//
         // TypedAttrInterface
         //===--------------------------------------------------------------===//
 
-        [[nodiscard]] ArrayType getType() const
-        {
-            return getArrayType();
-        }
+        [[nodiscard]] ArrayType getType() const { return getArrayType(); }
     }];
 }
 

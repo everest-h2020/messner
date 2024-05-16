@@ -210,6 +210,21 @@ def EKL_ArrayType : EKL_Type<"Array", [EKL_ContiguousType]> {
     let genVerifyDecl = 1;
 
     code extraClassDeclaration = [{
+        /// Determines whether @p indices are in bounds for this array.
+        ///
+        /// Will also accept partial indexing using fewer @p indices than there
+        /// are extents, as long as their common prefix is in bounds.
+        ///
+        /// @return Whether @p indices is lexicographically less than the prefix
+        ///         of the extents with the same length.
+        [[nodiscard]] bool isInBounds(ExtentRange indices) const
+        {
+            if (indices.size() > getNumExtents()) return false;
+            for (auto [index, bound] : llvm::zip_first(indices, getExtents()))
+                if (index >= bound) return false;
+            return true;
+        }
+
         /// Obtains a copy with different @p extents .
         ///
         /// @pre    @p extents does not contain @c 0UL .

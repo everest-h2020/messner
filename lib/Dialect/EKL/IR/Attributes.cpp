@@ -73,30 +73,113 @@ static void printSourceRange(
 LogicalResult ekl::ArrayAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
     ArrayType arrayType,
-    mlir::ArrayAttr flattened)
+    mlir::ArrayAttr stack)
 {
     if (!arrayType) return emitError() << "expected array type";
-    if (!flattened) return emitError() << "expected array attribute";
+    if (!stack) return emitError() << "expected stack attribute";
+    if (stack.empty()) return emitError() << "stack can't be empty";
 
-    const auto numElements = arrayType.getNumElements();
-    assert(succeeded(numElements));
-    if (flattened.size() != 1 && flattened.size() != *numElements)
-        return emitError() << "expected " << *numElements
-                           << " elements, but got " << flattened.size();
+    const auto verifyCovariant = [&](Type type) -> LogicalResult {
+        if (!isSubtype(type, arrayType.getScalarType())) {
+            auto diag = emitError() << "type mismatch";
+            diag.attachNote()
+                << type << " is not a subtype of " << arrayType.getScalarType();
+            return diag;
+        }
 
-    for (auto [idx, value] : llvm::enumerate(flattened.getValue())) {
-        const auto scalarAttr = llvm::dyn_cast<ScalarAttr>(value);
-        if (!scalarAttr)
-            return emitError() << "element #" << idx << " (" << value
-                               << ") is not an EKL scalar value";
+        return success();
+    };
 
-        if (!isSubtype(scalarAttr.getType(), arrayType.getScalarType()))
-            return emitError()
-                << "type " << scalarAttr.getType() << " of element #" << idx
-                << " is not a subtype of " << arrayType.getScalarType();
+    const auto scalar = llvm::dyn_cast<ScalarAttr>(*stack.begin());
+    if (scalar) {
+        if (failed(verifyCovariant(scalar.getType()))) return failure();
+        // Attribute is a valid splat.
+        return success();
+    }
+    if (arrayType.isScalar()) {
+        // Scalars must always be stored as a splat.
+        return emitError() << "expected splat";
     }
 
+    const auto subExtents    = arrayType.getExtents().drop_front();
+    const auto verifyElement = [&](Attribute attr) -> LogicalResult {
+        const auto arrayAttr = llvm::dyn_cast<ekl::ArrayAttr>(attr);
+        if (!arrayAttr) return emitError() << "expected array attribute";
+        if (failed(verifyCovariant(arrayAttr.getType().getScalarType())))
+            return failure();
+        if (arrayAttr.getType().getExtents() != subExtents) {
+            auto diag  = emitError() << "extent mismatch";
+            auto &note = diag.attachNote() << "[";
+            llvm::interleaveComma(arrayAttr.getType().getExtents(), note);
+            note << "] != [";
+            llvm::interleaveComma(subExtents, note);
+            note << "]";
+            return diag;
+        }
+
+        return success();
+    };
+
+    if (failed(verifyElement(*stack.begin()))) return failure();
+    if (stack.size() == 1) {
+        // Attribute is a valid broadcast.
+        return success();
+    }
+    if (stack.size() != arrayType.getExtent(0)) {
+        auto diag = emitError() << "extent mismatch";
+        diag.attachNote() << stack.size() << " != " << arrayType.getExtent(0);
+        return diag;
+    }
+
+    for (auto element : stack.getValue().drop_front())
+        if (failed(verifyElement(element))) return failure();
+
     return success();
+}
+
+[[nodiscard]] static Attribute
+subscript(ekl::ArrayAttr root, ExtentRange indices)
+{
+    assert(root.getType().isInBounds(indices));
+
+    while (!indices.empty()) {
+        const auto stack = root.getStack().getValue();
+        assert(!stack.empty());
+
+        if (stack.size() > 1) {
+            // Descend into the stacked child array.
+            root    = llvm::cast<ekl::ArrayAttr>(stack[indices.front()]);
+            indices = indices.drop_front();
+            continue;
+        }
+
+        if (const auto bcast = llvm::dyn_cast<ekl::ArrayAttr>(stack.front())) {
+            // Descend into implicitly broadcasted child array.
+            root    = bcast;
+            indices = indices.drop_front();
+            continue;
+        }
+
+        // The result will be a splat, we just have to drop all the extents that
+        // we'd still need to apply an index to.
+        const auto splat = llvm::cast<ScalarAttr>(stack.front());
+        const auto extents =
+            root.getType().getExtents().drop_front(indices.size());
+
+        // Automatically decay to a scalar if needed.
+        if (extents.empty()) return splat;
+        // Make a new splat attribute.
+        return ekl::ArrayAttr::get(root.getType().cloneWith(extents), splat);
+    }
+
+    // Automatically decay to a scalar if needed.
+    if (root.getType().isScalar()) return *root.getStack().begin();
+    return root;
+}
+
+Attribute ekl::ArrayAttr::subscript(ExtentRange indices) const
+{
+    return ::subscript(*this, indices);
 }
 
 //===----------------------------------------------------------------------===//
