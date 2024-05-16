@@ -88,9 +88,8 @@ OwningOpRef<ProgramOp> ParseDriver::takeResult()
                    llvm::dbgs() << "\n");
 
         m_result.release();
-    }
-
-    if (hasWarnings()) emitWarning("parsing completed with warnings");
+    } else if (hasWarnings())
+        emitWarning("parsing completed with warnings");
 
     m_scopes.clear();
     return std::move(m_result);
