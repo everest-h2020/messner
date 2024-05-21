@@ -225,6 +225,20 @@ def EKL_ArrayType : EKL_Type<"Array", [EKL_ContiguousType]> {
             return true;
         }
 
+        /// Determines whether this type can be broadcast to @p extents.
+        ///
+        /// For broadcasting, the the extents must either match pairwise, or
+        /// the current extent must be 1 in the mismatched dimensions.
+        ///
+        /// @return Whether @p extents are a valid broadcast target.
+        [[nodiscard]] bool isBroadcastableTo(ExtentRange extents) const
+        {
+            if (extents.size() != getNumExtents()) return false;
+            for (auto [have, want] : llvm::zip_equal(getExtents(), extents))
+                if (have != want && have != 1) return false;
+            return true;
+        }
+
         /// Obtains a copy with different @p extents .
         ///
         /// @pre    @p extents does not contain @c 0UL .

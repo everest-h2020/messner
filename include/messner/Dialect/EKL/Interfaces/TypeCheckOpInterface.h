@@ -17,10 +17,20 @@ namespace mlir::ekl::impl {
 
 /// Uses a LocalTypeChecker to determine whether @p op is valid.
 ///
-/// @param  [in]        op              Operation to verify.
+/// @param  [in]        op  Operation.
 ///
 /// @return Whether verification succeeded.
 LogicalResult verifyTypeCheckOpInterface(Operation *op);
+
+/// Determines whether @p op is fully typed.
+///
+/// An operation is fully typed if it does not have any unbounded expression
+/// operands or results.
+///
+/// @param  [in]        op  Operation.
+///
+/// @return Whether @p op is fully typed.
+bool isFullyTyped(Operation *op);
 
 } // namespace mlir::ekl::impl
 

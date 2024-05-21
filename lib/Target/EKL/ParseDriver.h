@@ -246,11 +246,12 @@ public:
     // Operation factories
     //===------------------------------------------------------------------===//
 
-    LogicalResult global(
+    LogicalResult declareStatic(
         ImportLocation nameLoc,
+        AccessModifier access,
         StringRef name,
         TypeExpr type,
-        InitializerAttr init = {});
+        ekl::ArrayAttr init = {});
 
     LogicalResult beginKernel(ImportLocation nameLoc, StringRef name);
     void beginIf(ImportLocation introLoc, Expr cond, bool withResult = false);
@@ -262,17 +263,11 @@ public:
     }
     void beginAssoc(ImportLocation introLoc);
     void beginZip(ImportLocation introLoc, ArrayRef<Expr> exprs);
-    void beginReduce(
-        ImportLocation introLoc,
-        ImportLocation reductionLoc,
-        OperationName reductionOp);
 
     template<class T = Operation *>
     T end()
     {
-        const auto result = getOp();
-        m_builder.setInsertionPointAfter(result);
-        return llvm::cast<T>(result);
+        return llvm::cast<T>(endImpl());
     }
     template<class T = Operation *>
     Expression yieldAndEnd(Expr expr)
@@ -307,8 +302,8 @@ public:
     // Constant expressions
     //===------------------------------------------------------------------===//
 
-    void pushConstexpr(ImportLocation introLoc);
-    FailureOr<LiteralAttr> popConstexpr(Expr expr);
+    void beginConstexpr(ImportLocation introLoc);
+    FailureOr<LiteralAttr> evalConstexpr(Expr expr);
 
     FailureOr<SmallVector<extent_t>> extents(ArrayRef<ConstExpr> exprs);
 
@@ -317,6 +312,16 @@ public:
     FailureOr<ArrayType> arrayType(TypeExpr scalar, Extents extents);
 
 private:
+    Scope &getFileScope() { return m_scopes.back(); }
+    Block *getBlock() { return m_builder.getInsertionBlock(); }
+    template<class Op = Operation *>
+    Op getOp()
+    {
+        return llvm::cast<Op>(getBlock()->getParentOp());
+    }
+
+    Operation *endImpl();
+
     template<class Op>
     Op create(ImportLocation opLoc, auto &&...args)
     {
@@ -342,14 +347,6 @@ private:
         return m_builder.create<Op>(
             getLocation(opLoc),
             mapArg(std::forward<decltype(args)>(args))...);
-    }
-
-    Scope &getFileScope() { return m_scopes.back(); }
-    Block *getBlock() { return m_builder.getInsertionBlock(); }
-    template<class Op = Operation *>
-    Op getOp()
-    {
-        return llvm::cast<Op>(getBlock()->getParentOp());
     }
 
     SmallVector<Value> unpack(ArrayRef<Expr> exprs);

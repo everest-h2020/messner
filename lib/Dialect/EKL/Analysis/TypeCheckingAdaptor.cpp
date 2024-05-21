@@ -32,7 +32,8 @@ Contradiction TypeCheckingAdaptor::broadcast(
     SmallVectorImpl<extent_t> &extents) const
 {
     switch (ekl::broadcast(types, extents)) {
-    case BroadcastResult::Success:   return Contradiction::none();
+    case BroadcastResult::Scalar:
+    case BroadcastResult::Array:     return Contradiction::none();
     case BroadcastResult::Unbounded: return Contradiction::indeterminate();
     case BroadcastResult::Failure:
         auto diag = emitError() << "can't broadcast ";
@@ -69,7 +70,8 @@ Contradiction TypeCheckingAdaptor::broadcast(
 Contradiction TypeCheckingAdaptor::broadcast(MutableArrayRef<Type> types) const
 {
     switch (ekl::broadcast(types)) {
-    case BroadcastResult::Success:   return Contradiction::none();
+    case BroadcastResult::Scalar:
+    case BroadcastResult::Array:     return Contradiction::none();
     case BroadcastResult::Unbounded: return Contradiction::indeterminate();
     case BroadcastResult::Failure:
         auto diag = emitError() << "can't broadcast ";
@@ -85,14 +87,6 @@ Contradiction TypeCheckingAdaptor::broadcast(
 {
     result = getTypes(exprs);
     return broadcast(result).explain(exprs);
-}
-
-Contradiction
-TypeCheckingAdaptor::broadcastAndUnify(ValueRange exprs, Type &result) const
-{
-    SmallVector<Type> broadcasted;
-    if (auto contra = broadcast(exprs, broadcasted)) return contra;
-    return unify(broadcasted, result).explain(exprs);
 }
 
 Contradiction

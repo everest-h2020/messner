@@ -12,44 +12,283 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include <algorithm>
+#include <bit>
 
 using namespace mlir;
 using namespace mlir::ekl;
 
+std::function<void(OpBuilder &, Location, ValueRange)>
+mlir::ekl::getFunctorBuilder(
+    OperationName op,
+    std::optional<Location> opLoc,
+    Type resultBound,
+    DictionaryAttr attributes)
+{
+    return [=](OpBuilder &builder, Location loc, ValueRange args) {
+        const auto result =
+            builder
+                .create(
+                    opLoc.value_or(loc),
+                    op.getIdentifier(),
+                    args,
+                    {ExpressionType::get(builder.getContext(), resultBound)},
+                    attributes ? attributes.getValue()
+                               : DictionaryAttr::ValueType{})
+                ->getResult(0);
+        builder.create<YieldOp>(loc, result);
+    };
+}
+
 //===----------------------------------------------------------------------===//
-// Custom directives
+// Shared directives
 //===----------------------------------------------------------------------===//
 
-static ParseResult parseSymbolDeclaration(
+static ParseResult parseTypeBound(OpAsmParser &parser, Type &type)
+{
+    // [ `:` type ]
+    type = Type{};
+    if (!parser.parseOptionalColon() && failed(parser.parseType(type)))
+        return failure();
+
+    type = ExpressionType::get(parser.getContext(), type);
+    return success();
+}
+
+static void printTypeBound(OpAsmPrinter &printer, Operation *, Type type)
+{
+    const auto bound = llvm::cast<ExpressionType>(type).getTypeBound();
+
+    // [ `:` type ]
+    if (bound) printer << ": " << bound;
+}
+
+static OptionalParseResult parseOptionalOperand(
+    OpAsmParser &parser,
+    OpAsmParser::UnresolvedOperand &operand,
+    Type &type)
+{
+    // [ value-use ... ]
+    const auto maybe = parser.parseOptionalOperand(operand);
+    if (!maybe.has_value()) return maybe;
+    if (failed(*maybe)) return failure();
+
+    // [ `:` type ]
+    return parseTypeBound(parser, type);
+}
+
+static ParseResult parseOperand(
+    OpAsmParser &parser,
+    OpAsmParser::UnresolvedOperand &operand,
+    Type &type)
+{
+    const auto maybe = parseOptionalOperand(parser, operand, type);
+    if (!maybe.has_value())
+        return parser.emitError(
+            parser.getCurrentLocation(),
+            "expected SSA operand");
+    return *maybe;
+}
+
+static void
+printOperand(OpAsmPrinter &printer, Operation *op, Value operand, Type type)
+{
+    // value-use
+    printer << operand;
+
+    // [ `:` type ]
+    printTypeBound(printer, op, type);
+}
+
+static ParseResult parseOperands(
+    OpAsmParser &parser,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &operands,
+    SmallVectorImpl<Type> &types)
+{
+    // [ expr-operand ... ]
+    {
+        OpAsmParser::UnresolvedOperand operand;
+        Type type;
+        const auto maybe = parseOptionalOperand(parser, operand, type);
+        if (!maybe.has_value()) return success();
+        if (failed(*maybe)) return failure();
+        operands.push_back(operand);
+        types.push_back(type);
+    }
+
+    // { `,` expr-operand }
+    while (!parser.parseOptionalComma())
+        if (parseOperand(parser, operands.emplace_back(), types.emplace_back()))
+            return failure();
+
+    return success();
+}
+
+static void printOperands(
+    OpAsmPrinter &printer,
+    Operation *op,
+    OperandRange operands,
+    TypeRange types)
+{
+    // [ expr-operand { `,` expr-operand } ]
+    auto typeIt = types.begin();
+    llvm::interleaveComma(operands, printer, [&](Value operand) {
+        printOperand(printer, op, operand, *typeIt++);
+    });
+}
+
+static ParseResult parseResult(OpAsmParser &parser, Type &result)
+{
+    // [ `->` type ]
+    Type bound = nullptr;
+    if (!parser.parseOptionalArrow()) {
+        if (parser.parseType(bound)) return failure();
+    }
+
+    result = ExpressionType::get(parser.getContext(), bound);
+    return success();
+}
+
+static void printResult(OpAsmPrinter &printer, Operation *, Type result)
+{
+    const auto bound = llvm::cast<ExpressionType>(result).getTypeBound();
+
+    // [ `->` type ]
+    if (bound) printer << "-> " << bound;
+}
+
+static ParseResult parseFunctor(OpAsmParser &parser, Region &body)
+{
+    SmallVector<OpAsmParser::Argument> arguments;
+
+    // [ `(` ... { `,` ... } `)` ]
+    if (parser.parseCommaSeparatedList(
+            OpAsmParser::Delimiter::OptionalParen,
+            [&]() -> ParseResult {
+                // `ssa-id`
+                if (parser.parseArgument(arguments.emplace_back()))
+                    return failure();
+
+                // [ `:` type ]
+                if (failed(parseTypeBound(parser, arguments.back().type)))
+                    return failure();
+
+                // [ `loc` `(` attr `)` ]
+                return parser.parseOptionalLocationSpecifier(
+                    arguments.back().sourceLoc);
+            }))
+        return failure();
+
+    // $body
+    return parser.parseRegion(body, arguments);
+}
+
+static void printFunctor(OpAsmPrinter &printer, Operation *op, Region &body)
+{
+    // [ `(` ... { `,` ... } `)` ]
+    if (body.getNumArguments() > 0) {
+        printer << "(";
+        llvm::interleaveComma(
+            body.getArguments(),
+            printer,
+            [&](BlockArgument arg) {
+                // ssa-id
+                printer << arg;
+
+                // [ `:` type ]
+                printTypeBound(printer, op, arg.getType());
+
+                // [ `loc` `(` attr `)` ]
+                printer.printOptionalLocationSpecifier(arg.getLoc());
+            });
+        printer << ") ";
+    }
+
+    // $body
+    printer.printRegion(body, false);
+}
+
+//===----------------------------------------------------------------------===//
+// StaticOp directives
+//===----------------------------------------------------------------------===//
+
+static void
+parseOptionalAccessModifier(OpAsmParser &parser, AccessModifier &modifier)
+{
+    // (`local` | `import` | `export`)?
+    StringRef keyword{};
+    if (parser.parseOptionalKeyword(&keyword, {"local", "import", "export"}))
+        keyword = "local";
+
+    modifier = llvm::StringSwitch<AccessModifier>(keyword)
+                   .Case("import", AccessModifier::Import)
+                   .Case("export", AccessModifier::Export)
+                   .Default(AccessModifier::Local);
+}
+
+static ParseResult parseSymbolDecl(
     OpAsmParser &parser,
     StringAttr &sym_visibility,
+    UnitAttr &isOwned,
     StringAttr &sym_name)
 {
-    // (`public` | `private` | `nested`)?
-    std::string keyword;
-    const auto loc = parser.getCurrentLocation();
-    if (!parser.parseOptionalKeywordOrString(&keyword) && keyword != "public") {
-        if (!llvm::is_contained({"private", "nested"}, keyword))
-            return parser.emitError(loc, "expected public, private or nested");
-
-        sym_visibility = parser.getBuilder().getStringAttr(keyword);
-    }
+    // (`local` | `import` | `export`)?
+    AccessModifier modifier;
+    parseOptionalAccessModifier(parser, modifier);
+    if (modifier != AccessModifier::Import)
+        isOwned = parser.getBuilder().getUnitAttr();
+    if (modifier != AccessModifier::Export)
+        sym_visibility = parser.getBuilder().getStringAttr("private");
 
     // $sym_name
     return parser.parseSymbolName(sym_name);
 }
 
-static void printSymbolDeclaration(
+static void printSymbolDecl(
+    OpAsmPrinter &printer,
+    Operation *,
+    StringAttr sym_visibility,
+    UnitAttr isOwned,
+    StringAttr sym_name)
+{
+    // (`local` | `import` | `export`)?
+    const auto isPublic =
+        !sym_visibility || sym_visibility.getValue() == "public";
+    if (isPublic) printer << "export ";
+    if (!isOwned) printer << "import ";
+
+    // $sym_name
+    printer.printSymbolName(sym_name.getValue());
+}
+
+//===----------------------------------------------------------------------===//
+// KernelOp directives
+//===----------------------------------------------------------------------===//
+
+static ParseResult parseSymbolDecl(
+    OpAsmParser &parser,
+    StringAttr &sym_visibility,
+    StringAttr &sym_name)
+{
+    // (`public` | `private` | `nested`)?
+    StringRef keyword{};
+    if (parser.parseOptionalKeyword(&keyword, {"public", "private", "nested"}))
+        keyword = "public";
+    if (!keyword.empty())
+        sym_visibility = parser.getBuilder().getStringAttr(keyword);
+
+    // $sym_name
+    return parser.parseSymbolName(sym_name);
+}
+
+static void printSymbolDecl(
     OpAsmPrinter &printer,
     Operation *,
     StringAttr sym_visibility,
     StringAttr sym_name)
 {
     // (`public` | `private` | `nested`)?
-    if (sym_visibility && sym_visibility.getValue() != "public") {
-        printer.printKeywordOrString(sym_visibility.getValue());
-        printer << " ";
-    }
+    if (sym_visibility && sym_visibility.getValue() != "public")
+        printer << sym_visibility.getValue() << " ";
 
     // $sym_name
     printer.printSymbolName(sym_name.getValue());
@@ -101,203 +340,42 @@ static void printKernelBody(
     // attr-dict-with-keyword
     printer.printOptionalAttrDictWithKeyword(
         attributes.getValue(),
-        {"sym_name"});
+        {"sym_name", "sym_visibility"});
 
     // $body
     printer << " ";
     printer.printRegion(body, false);
 }
 
-static ParseResult parseOptionalExprOperand(
-    OpAsmParser &parser,
-    std::optional<OpAsmParser::UnresolvedOperand> &operand,
-    Type &type)
+//===----------------------------------------------------------------------===//
+// LiteralOp directives
+//===----------------------------------------------------------------------===//
+
+static ParseResult
+parseLiteralResult(OpAsmParser &parser, LiteralAttr attr, Type &type)
 {
-    operand.emplace();
-
-    // [ value-use ... ]
-    const auto maybe = parser.parseOptionalOperand(*operand);
-    if (!maybe.has_value()) {
-        operand.reset();
-        return success();
-    }
-    if (maybe.value()) {
-        operand.reset();
-        return failure();
+    type = attr.getType();
+    if (!parser.parseOptionalArrow()) {
+        if (parser.parseType(type)) return failure();
     }
 
-    // [ `:` type ]
-    Type bound = nullptr;
-    if (!parser.parseOptionalColon()) {
-        if (parser.parseType(bound)) return failure();
-    }
-
-    type = ExpressionType::get(parser.getContext(), bound);
+    type = ExpressionType::get(parser.getContext(), type);
     return success();
 }
 
-static ParseResult parseExprOperand(
-    OpAsmParser &parser,
-    OpAsmParser::UnresolvedOperand &operand,
-    Type &type)
-{
-    std::optional<OpAsmParser::UnresolvedOperand> maybe;
-    if (parseOptionalExprOperand(parser, maybe, type)) return failure();
-    if (!maybe)
-        return parser.emitError(
-            parser.getCurrentLocation(),
-            "expected SSA operand");
-
-    operand = *maybe;
-    return success();
-}
-
-static void printExprOperand(
+static void printLiteralResult(
     OpAsmPrinter &printer,
     Operation *,
-    Value operand,
+    LiteralAttr attr,
     ExpressionType type)
 {
-    // value-use
-    printer << operand;
-
-    // [ `:` type ]
-    if (!type.isUnbounded()) printer << ": " << type.getTypeBound();
+    if (type.getTypeBound() == attr.getType()) return;
+    printer << "-> " << type.getTypeBound();
 }
 
-static void printOptionalExprOperand(
-    OpAsmPrinter &printer,
-    Operation *op,
-    Value operand,
-    Type type)
-{
-    if (!operand) return;
-    printExprOperand(printer, op, operand, llvm::cast<ExpressionType>(type));
-}
-
-static ParseResult parseExprOperand(
-    OpAsmParser &parser,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &operands,
-    SmallVectorImpl<Type> &types)
-{
-    // [ expr-operand ... ]
-    std::optional<OpAsmParser::UnresolvedOperand> operand;
-    Type type;
-    if (parseOptionalExprOperand(parser, operand, type)) return failure();
-    if (!operand) return success();
-    operands.push_back(*operand);
-    types.push_back(type);
-
-    // { `,` expr-operand }
-    while (!parser.parseOptionalComma())
-        if (parseExprOperand(
-                parser,
-                operands.emplace_back(),
-                types.emplace_back()))
-            return failure();
-
-    return success();
-}
-
-static void printExprOperand(
-    OpAsmPrinter &printer,
-    Operation *op,
-    OperandRange operands,
-    TypeRange types)
-{
-    const auto printOperand = [&]() {
-        printExprOperand(
-            printer,
-            op,
-            operands.front(),
-            llvm::cast<ExpressionType>(types.front()));
-        operands = operands.drop_front(1);
-        types    = types.drop_front(1);
-    };
-
-    // [ expr-operand ... ]
-    if (operands.empty()) return;
-    printOperand();
-
-    // { `,` expr-operand }
-    while (!operands.empty()) {
-        printer << ", ";
-        printOperand();
-    }
-}
-
-static ParseResult parseExprResult(OpAsmParser &parser, Type &result)
-{
-    // [ `->` type ]
-    Type bound = nullptr;
-    if (!parser.parseOptionalArrow()) {
-        if (parser.parseType(bound)) return failure();
-    }
-
-    result = ExpressionType::get(parser.getContext(), bound);
-    return success();
-}
-
-static void
-printExprResult(OpAsmPrinter &printer, Operation *, ExpressionType result)
-{
-    // [ `->` type ]
-    if (!result.isUnbounded()) printer << "-> " << result.getTypeBound();
-}
-
-static ParseResult parseFunctor(OpAsmParser &parser, Region &body)
-{
-    SmallVector<OpAsmParser::Argument> arguments;
-
-    // [ `(` ... { `,` ... } `)` ]
-    if (parser.parseCommaSeparatedList(
-            OpAsmParser::Delimiter::OptionalParen,
-            [&]() -> ParseResult {
-                // `ssa-id`
-                if (parser.parseArgument(arguments.emplace_back()))
-                    return failure();
-
-                // [ `:` type ]
-                Type argTy{};
-                if (!parser.parseOptionalColon()) {
-                    if (parser.parseType(argTy)) return failure();
-                }
-                arguments.back().type =
-                    ExpressionType::get(parser.getContext(), argTy);
-
-                // [ `loc` `(` loc `)` ]
-                return parser.parseOptionalLocationSpecifier(
-                    arguments.back().sourceLoc);
-            }))
-        return failure();
-
-    // $body
-    return parser.parseRegion(body, arguments);
-}
-
-static void printFunctor(OpAsmPrinter &printer, Operation *, Region &body)
-{
-    // [ `(` ... { `,` ... } `)` ]
-    if (body.getNumArguments() > 0) {
-        printer << "(";
-        llvm::interleaveComma(
-            body.getArguments(),
-            printer,
-            [&](BlockArgument arg) {
-                // ssa-id
-                printer << arg;
-
-                // [ `:` type ]
-                const auto exprTy = llvm::cast<ExpressionType>(arg.getType());
-                if (!exprTy.isUnbounded())
-                    printer << ": " << exprTy.getTypeBound();
-            });
-        printer << ") ";
-    }
-
-    // $body
-    printer.printRegion(body, false);
-}
+//===----------------------------------------------------------------------===//
+// IfOp directives
+//===----------------------------------------------------------------------===//
 
 static ParseResult
 parseElseBranch(OpAsmParser &parser, Region &body, Type &resultType)
@@ -336,28 +414,42 @@ static void printElseBranch(
 //===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
-// EvalOp implementation
+// ProgramOp implementation
 //===----------------------------------------------------------------------===//
 
-LogicalResult EvalOp::typeCheck(AbstractTypeChecker &typeChecker)
+LogicalResult ProgramOp::verifyRegions()
 {
-    TypeCheckingAdaptor adaptor(typeChecker, *this);
+    // All descendants must be symbol declarations.
+    for (auto &op : this->getOps())
+        if (!op.hasTrait<ekl::OpTrait::IsSymbol>()) {
+            auto diag = op.emitOpError("is not a symbol declaration");
+            diag.attachNote(getLoc()) << "required by this operation";
+            return diag;
+        }
 
-    Type resultTy;
-    return adaptor.require(getInput(), getType(), resultTy);
+    return success();
 }
 
-OpFoldResult EvalOp::fold(EvalOp::FoldAdaptor adaptor)
+//===----------------------------------------------------------------------===//
+// IntroOp implementation
+//===----------------------------------------------------------------------===//
+
+OpFoldResult IntroOp::fold(IntroOp::FoldAdaptor adaptor)
 {
-    // NOTE: Attributes folded in this way can't actually be materialized.
-    return adaptor.getInput();
+    // If the input value is a compatible LiteralAttr, it is materialized by the
+    // dialect. Otherwise, it will be passed along by the folder, but there is
+    // no guarantee this op will be deleted.
+    return adaptor.getValue();
 }
 
-//===----------------------------------------------------------------------===//
-// DefineOp implementation
-//===----------------------------------------------------------------------===//
+bool IntroOp::areCastCompatible(TypeRange inputs, TypeRange outputs)
+{
+    const auto in  = inputs.front();
+    const auto out = llvm::dyn_cast<ExpressionType>(outputs.front());
+    return out && out.getTypeBound() == in;
+}
 
-LogicalResult DefineOp::inferReturnTypes(
+LogicalResult IntroOp::inferReturnTypes(
     MLIRContext *context,
     std::optional<Location>,
     ValueRange operands,
@@ -366,138 +458,183 @@ LogicalResult DefineOp::inferReturnTypes(
     RegionRange,
     SmallVectorImpl<Type> &inferredReturnTypes)
 {
-    inferredReturnTypes.push_back(
-        ExpressionType::get(context, operands.front().getType()));
+    // Wrap the type in an ExpressionType.
+    const auto type = operands.front().getType();
+    inferredReturnTypes.push_back(ExpressionType::get(context, type));
     return success();
 }
 
-OpFoldResult DefineOp::fold(DefineOp::FoldAdaptor adaptor)
-{
-    return adaptor.getInput();
-}
-
 //===----------------------------------------------------------------------===//
-// ConstexprOp implementation
+// EvalOp implementation
 //===----------------------------------------------------------------------===//
 
-LogicalResult ConstexprOp::verifyRegions()
+OpFoldResult EvalOp::fold(EvalOp::FoldAdaptor adaptor)
 {
-    // Check that all children are pure.
-    for (auto &op : getExpression().getOps())
-        if (!isPure(&op))
-            return op.emitOpError("is impure").attachNote(getLoc())
-                << "required by this operation";
+    if (!isSpeculatable(*this)) return {};
 
-    return success();
+    // Since the result type of the op is not an ExpressionType, the dialect
+    // constant materializer will not be able to materialize any attribute
+    // returned by this operation.
+    return adaptor.getExpression();
 }
 
-OpFoldResult ConstexprOp::fold(ConstexprOp::FoldAdaptor)
+Speculation::Speculatability EvalOp::getSpeculatability()
 {
-    // Get the yielded value.
-    auto yieldOp     = llvm::cast<YieldOp>(&getExpression().front().back());
-    const auto yield = llvm::cast<Expression>(yieldOp.getValue());
-
-    // Fold to that value if it is constant.
-    LiteralAttr literal;
-    if (matchPattern(yield, m_Constant(&literal))) return literal;
-
-    return {};
+    // Speculation is not allowed until UB can be excluded.
+    return isFullyTyped() ? Speculation::Speculatable
+                          : Speculation::NotSpeculatable;
 }
 
-LogicalResult ConstexprOp::typeCheck(AbstractTypeChecker &typeChecker)
+bool EvalOp::areCastCompatible(TypeRange inputs, TypeRange outputs)
+{
+    const auto in  = llvm::dyn_cast<ExpressionType>(inputs.front());
+    const auto out = outputs.front();
+    return in && (!in.getTypeBound() || isSubtype(in.getTypeBound(), out));
+}
+
+LogicalResult EvalOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
-    // Get the yielded type.
-    auto yieldOp       = llvm::cast<YieldOp>(&getExpression().front().back());
-    const auto yield   = llvm::cast<Expression>(yieldOp.getValue());
-    const auto yieldTy = adaptor.getType(yield);
-    if (!yieldTy) return success();
-
-    return adaptor.refineBound(getResult(), yieldTy);
+    // If the expression is typed, it must be a subtype of the result type.
+    Type resultTy;
+    return adaptor.require(getExpression(), getType(), resultTy);
 }
 
 //===----------------------------------------------------------------------===//
-// GlobalOp implementation
+// StaticOp implementation
 //===----------------------------------------------------------------------===//
 
-void GlobalOp::build(
+void StaticOp::build(
     OpBuilder &builder,
     OperationState &state,
     StringRef name,
-    ABIReferenceType type,
-    InitializerAttr initializer,
-    SymbolTable::Visibility visibility)
+    ReferenceType type,
+    AccessModifier access,
+    ekl::ArrayAttr initializer)
 {
     state.addAttribute(
         getSymNameAttrName(state.name),
         builder.getStringAttr(name));
     state.addAttribute(getTypeAttrName(state.name), TypeAttr::get(type));
-
     if (initializer)
         state.addAttribute(getInitializerAttrName(state.name), initializer);
 
-    switch (visibility) {
-    case SymbolTable::Visibility::Nested:
-        state.addAttribute(
-            getSymVisibilityAttrName(state.name),
-            builder.getStringAttr("nested"));
-        break;
-    case SymbolTable::Visibility::Private:
+    const auto setPrivate = [&]() {
         state.addAttribute(
             getSymVisibilityAttrName(state.name),
             builder.getStringAttr("private"));
+    };
+    const auto setOwned = [&]() {
+        state.addAttribute(
+            getIsOwnedAttrName(state.name),
+            builder.getUnitAttr());
+    };
+
+    switch (access) {
+    case AccessModifier::Local:
+        setOwned();
+        setPrivate();
         break;
-    default: break;
+    case AccessModifier::Import:
+        // By default, variables are not owned.
+        setPrivate();
+        break;
+    case AccessModifier::Export:
+        setOwned();
+        // By default, variables are public.
+        break;
     }
 }
 
-LogicalResult GlobalOp::verify()
+LogicalResult StaticOp::verify()
 {
-    if (const auto initAttr = getInitializer()) {
-        const auto initTy = initAttr->getType();
-        if (initTy != getType().getArrayType())
-            return emitOpError("expected initializer of type ")
-                << getType().getArrayType() << " but got " << initTy;
+    if (isPublic() && !isOwned()) {
+        // According to the SymbolTable rules, this doesn't make any sense.
+        return emitOpError() << "public symbol must be owned";
     }
+
+    if ((isPublic() || !isOwned()) && !llvm::isa<ABIReferenceType>(getType())) {
+        // This variable does not have an ABI.
+        return emitOpError()
+            << "non-local variable requires ABI-compatible reference, found "
+            << getType();
+    }
+
+    if (const auto initializer = getInitializerAttr()) {
+        // If an initializer was provided, it must be valid.
+        if (!isOwned())
+            return emitOpError() << "can't initialize imported value";
+        if (!isSubtype(initializer.getType(), getDataType())) {
+            auto diag = emitOpError() << "initializer type mismatch: ";
+            diag << initializer.getType() << " can't initialize value of type ";
+            diag << getDataType();
+            return diag;
+        }
+
+        return success();
+    }
+
+    // If no initializer was provided, it must not be needed.
+    if (isPublic())
+        return emitOpError() << "exported variable must be initialized";
+    if (isOwned() && isReadable())
+        return emitOpError() << "readable local variable must be initialized";
 
     return success();
 }
 
-LogicalResult GlobalOp::canonicalize(GlobalOp op, PatternRewriter &rewriter)
+LogicalResult StaticOp::canonicalize(StaticOp op, PatternRewriter &rewriter)
 {
-    // Initializers on non-readable non-public symbols are useless.
-    if (op.getVisibility() != SymbolTable::Visibility::Public
-        && !op.getType().isReadable() && op.getInitializer()) {
-        rewriter.updateRootInPlace(op, [&]() { op.removeInitializerAttr(); });
-        return success();
-    }
+    // Remove the initializer attribute of a write-only local variable.
+    if (!op.getInitializerAttr() || op.isPublic() || !op.isOwned()
+        || op.isReadable())
+        return failure();
 
-    return failure();
+    rewriter.updateRootInPlace(op, [&]() { op.removeInitializerAttr(); });
+    return success();
+}
+
+AccessModifier StaticOp::getAccessModifier()
+{
+    // This must mirror the builder, assuming verification.
+    if (isPublic()) return AccessModifier::Export;
+    if (isOwned()) return AccessModifier::Local;
+    return AccessModifier::Import;
 }
 
 //===----------------------------------------------------------------------===//
 // KernelOp implementation
 //===----------------------------------------------------------------------===//
 
-void KernelOp::build(OpBuilder &builder, OperationState &state, StringRef name)
+void KernelOp::build(
+    OpBuilder &builder,
+    OperationState &state,
+    StringRef name,
+    bool isPrivate)
 {
     state.addRegion()->emplaceBlock();
     state.addAttribute(
         getSymNameAttrName(state.name),
         builder.getStringAttr(name));
+    if (isPrivate)
+        state.addAttribute(
+            getSymVisibilityAttrName(state.name),
+            builder.getStringAttr("private"));
 }
 
 LogicalResult KernelOp::verify()
 {
-    for (auto arg : getBody().getArguments()) {
-        const auto exprTy = llvm::dyn_cast<ExpressionType>(arg.getType());
-        if (exprTy && llvm::isa_and_present<ABIType>(exprTy.getTypeBound()))
-            continue;
+    if (isPrivate()) return success();
 
-        return emitOpError("type ")
-            << arg.getType() << " of argument #" << arg.getArgNumber()
-            << " is not an ABI-compatible expression type";
+    // For public kernels, the argument types must be ABI compatible.
+    for (auto arg : getBody()->getArguments()) {
+        const auto argTy = llvm::cast<Expression>(arg).getType().getTypeBound();
+        if (llvm::isa<ABIType>(argTy)) continue;
+
+        auto diag = emitOpError() << argTy << " is not ABI-compatible";
+        diag.attachNote(arg.getLoc()) << "see argument #" << arg.getArgNumber();
+        return diag;
     }
 
     return success();
@@ -506,6 +643,13 @@ LogicalResult KernelOp::verify()
 //===----------------------------------------------------------------------===//
 // ReadOp implementation
 //===----------------------------------------------------------------------===//
+
+Speculation::Speculatability ReadOp::getSpeculatability()
+{
+    if (!isFullyTyped()) return Speculation::NotSpeculatable;
+    // TODO: Implement more concrete reference kinds.
+    return Speculation::Speculatable;
+}
 
 LogicalResult ReadOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
@@ -517,15 +661,20 @@ LogicalResult ReadOp::typeCheck(AbstractTypeChecker &typeChecker)
             adaptor.require(getReference(), refTy, "readable reference"))
         return contra;
 
-    // Result type is the referenced array type, decaying to a scalar.
-    return adaptor.refineBound(
-        getResult(),
-        decayToScalar(refTy.getArrayType()));
+    // Result type is the referenced array type.
+    return adaptor.refineBound(getResult(), refTy.getArrayType());
 }
 
 //===----------------------------------------------------------------------===//
 // WriteOp implementation
 //===----------------------------------------------------------------------===//
+
+Speculation::Speculatability WriteOp::getSpeculatability()
+{
+    if (!isFullyTyped()) return Speculation::NotSpeculatable;
+    // TODO: Implement more concrete reference kinds.
+    return Speculation::NotSpeculatable;
+}
 
 LogicalResult WriteOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
@@ -551,39 +700,93 @@ LogicalResult WriteOp::typeCheck(AbstractTypeChecker &typeChecker)
 // IfOp implementation
 //===----------------------------------------------------------------------===//
 
-static LogicalResult verifyFunctor(Operation *op, Region &functor)
+static void buildIf(
+    OpBuilder &builder,
+    OperationState &state,
+    Value condition,
+    BranchBuilderRef thenBranch,
+    BranchBuilderRef elseBranch,
+    Type resultType = {})
 {
-    if (functor.empty()) return success();
+    state.addOperands({condition});
+    if (resultType) {
+        assert(llvm::isa<ExpressionType>(resultType));
+        state.addTypes({resultType});
+    }
 
-    for (auto &&[idx, arg] : llvm::enumerate(functor.getArguments()))
-        if (!llvm::isa<ExpressionType>(arg.getType()))
-            return op->emitOpError()
-                << "argument #" << idx << " of region #"
-                << functor.getRegionNumber() << " must be an expression type";
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(&state.addRegion()->emplaceBlock());
+    if (thenBranch) thenBranch(builder, state.location);
+    if (elseBranch || resultType) {
+        builder.setInsertionPointToStart(&state.addRegion()->emplaceBlock());
+        if (elseBranch) elseBranch(builder, state.location);
+    }
+}
 
-    return success();
+void IfOp::build(
+    OpBuilder &builder,
+    OperationState &state,
+    Value condition,
+    BranchBuilderRef thenBranch,
+    BranchBuilderRef elseBranch)
+{
+    buildIf(builder, state, condition, thenBranch, elseBranch);
+}
+
+void IfOp::build(
+    OpBuilder &builder,
+    OperationState &state,
+    Value condition,
+    Type resultBound,
+    BranchBuilderRef thenBranch,
+    BranchBuilderRef elseBranch)
+{
+    buildIf(
+        builder,
+        state,
+        condition,
+        thenBranch,
+        elseBranch,
+        ExpressionType::get(builder.getContext(), resultBound));
 }
 
 LogicalResult IfOp::verify()
 {
-    if (getThenBranch().getNumArguments() != 0)
+    // The if branches may not have any arguments when they are present.
+    if (getThenRegion().getNumArguments() != 0)
         return emitOpError() << "no arguments allowed in then branch";
-    if (getElseBranch().getNumArguments() != 0)
+    if (getElseRegion().getNumArguments() != 0)
         return emitOpError() << "no arguments allowed in else branch";
 
-    if (failed(verifyFunctor(*this, getThenBranch()))
-        || failed(verifyFunctor(*this, getElseBranch())))
-        return failure();
+    if (isStatement()) {
+        const auto noTerminator = [&](Block *block) -> LogicalResult {
+            if (!block || block->empty()) return success();
+            auto op = &block->back();
+            if (!op->hasTrait<mlir::OpTrait::IsTerminator>()) return success();
 
-    if (!getResult()) return success();
+            auto diag = emitOpError() << "unexpected region terminator";
+            diag.attachNote(op->getLoc()) << "see terminator";
+            return diag;
+        };
 
-    if (getElseBranch().empty())
-        return emitOpError() << "else branch is required";
-    auto yield = llvm::cast<YieldOp>(getElseBranch().front().back());
-    if (!yield.getValue())
-        return yield.emitOpError("operand is required").attachNote(getLoc())
-            << "required by this operation";
+        // The statement if branches may not have terminators.
+        if (failed(noTerminator(getThenBranch()))) return failure();
+        if (failed(noTerminator(getElseBranch()))) return failure();
+        return success();
+    }
 
+    const auto yesTerminator = [&](Block *block,
+                                   const llvm::Twine &name) -> LogicalResult {
+        if (!block) return emitOpError() << name << " is required";
+        Operation *op = block->empty() ? nullptr : &block->back();
+        if (llvm::isa_and_present<YieldOp>(op)) return success();
+        // NOTE: HasFunctors has already barked at any non YieldOp terminator.
+        return emitOpError() << name << " requires terminator";
+    };
+
+    // The expression if branches must have terminators.
+    if (failed(yesTerminator(getThenBranch(), "then branch"))) return failure();
+    if (failed(yesTerminator(getElseBranch(), "else branch"))) return failure();
     return success();
 }
 
@@ -591,301 +794,86 @@ LogicalResult IfOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
-    // We need to ensure that the closures are in a verified state.
-    if (failed(verify())) return failure();
-
     // The condition must be a boolean.
     BoolType boolTy;
     if (auto contra = adaptor.require(getCondition(), boolTy, "bool"))
         return contra;
 
-    // Handle the statement case.
-    if (!getResult()) return success();
+    if (isStatement()) return success();
 
     // Unify the types of both branch expressions.
-    const auto trueVal =
-        llvm::cast<YieldOp>(&getThenBranch().front().back()).getValue();
-    const auto falseVal =
-        llvm::cast<YieldOp>(&getElseBranch().front().back()).getValue();
+    const auto trueVal  = getThenExpression();
+    const auto falseVal = getElseExpression();
     Type unifiedTy;
     if (auto contra = adaptor.unify(ValueRange({trueVal, falseVal}), unifiedTy))
         return contra;
 
-    return adaptor.refineBound(llvm::cast<Expression>(getResult()), unifiedTy);
+    return adaptor.refineBound(getExpression(), unifiedTy);
 }
 
-//===----------------------------------------------------------------------===//
-// PanicOp implementation
-//===----------------------------------------------------------------------===//
-
-// TODO: PanicOp.
-
-//===----------------------------------------------------------------------===//
-// UnifyOp implementation
-//===----------------------------------------------------------------------===//
-
-[[nodiscard]] static ScalarAttr unify(NumberAttr input, ScalarType output)
+Expression IfOp::getThenExpression()
 {
-    return llvm::TypeSwitch<ScalarType, ScalarAttr>(output)
-        .Case([&](NumberType) { return input; })
-        .Default(ScalarAttr{});
+    if (!isExpression()) return {};
+    return llvm::cast<YieldOp>(getThenBranch()->getTerminator())
+        .getExpression();
 }
 
-[[nodiscard]] static ScalarAttr unify(ekl::IntegerAttr input, ScalarType output)
+Expression IfOp::getElseExpression()
 {
-    return llvm::TypeSwitch<ScalarType, ScalarAttr>(output)
-        .Case([&](NumberType) {
-            return NumberAttr::get(
-                input.getContext(),
-                Number(input.getValue()));
-        })
-        .Case([&](ekl::IntegerType type) {
-            if (type == input.getType()) return input;
-            return llvm::cast<ekl::IntegerAttr>(
-                mlir::IntegerAttr::get(type, input.getValue()));
-        })
-        .Case([&](FloatType type) {
-            llvm::APFloat value(type.getFloatSemantics());
-            value.convertFromAPInt(
-                input.getValue(),
-                input.getType().isSigned(),
-                llvm::APFloat::roundingMode::NearestTiesToEven);
-            return FloatAttr::get(type, value);
-        })
-        .Default(ScalarAttr{});
-}
-
-[[nodiscard]] static ScalarAttr unify(FloatAttr input, ScalarType output)
-{
-    return llvm::TypeSwitch<ScalarType, ScalarAttr>(output)
-        .Case([&](NumberType) {
-            return NumberAttr::get(
-                input.getContext(),
-                Number(input.getValue()));
-        })
-        .Case([&](FloatType type) {
-            if (type == input.getType()) return input;
-            auto value = input.getValue();
-            bool losesInfo;
-            value.convert(
-                type.getFloatSemantics(),
-                llvm::APFloat::roundingMode::NearestTiesToEven,
-                &losesInfo);
-            return FloatAttr::get(type, value);
-        })
-        .Default(ScalarAttr{});
-}
-
-[[nodiscard]] static ScalarAttr unify(ekl::IndexAttr input, ScalarType output)
-{
-    return llvm::TypeSwitch<ScalarType, ScalarAttr>(output)
-        .Case([&](NumberType) {
-            return NumberAttr::get(
-                input.getContext(),
-                Number(input.getValue()));
-        })
-        .Case([&](ekl::IntegerType type) {
-            return llvm::cast<ekl::IntegerAttr>(mlir::IntegerAttr::get(
-                type,
-                llvm::APInt(64U, input.getValue())));
-        })
-        .Case([&](FloatType type) {
-            llvm::APFloat value(type.getFloatSemantics());
-            value.convertFromAPInt(
-                llvm::APInt(64U, input.getValue()),
-                false,
-                llvm::APFloat::roundingMode::NearestTiesToEven);
-            return FloatAttr::get(type, value);
-        })
-        .Case([&](ekl::IndexType) { return input; })
-        .Default(ScalarAttr{});
-}
-
-[[nodiscard]] static ScalarAttr unify(BoolAttr input, ScalarType output)
-{
-    return llvm::TypeSwitch<ScalarType, ScalarAttr>(output)
-        .Case([&](BoolType) { return input; })
-        .Default(ScalarAttr{});
-}
-
-[[nodiscard]] static ScalarAttr unify(ScalarAttr input, ScalarType output)
-{
-    return llvm::TypeSwitch<ScalarAttr, ScalarAttr>(input)
-        .Case([&](NumberAttr attr) { return unify(attr, output); })
-        .Case([&](ekl::IntegerAttr attr) { return unify(attr, output); })
-        .Case([&](FloatAttr attr) { return unify(attr, output); })
-        .Case([&](ekl::IndexAttr attr) { return unify(attr, output); })
-        .Case([&](BoolAttr attr) { return unify(attr, output); })
-        .Default(ScalarAttr{});
-}
-
-[[nodiscard]] static ekl::ArrayAttr unify(LiteralAttr input, ArrayType output)
-{
-    return llvm::TypeSwitch<LiteralAttr, ekl::ArrayAttr>(input)
-        .Case(
-            [&](ScalarAttr attr) { return ekl::ArrayAttr::get(output, attr); })
-        .Case([&](ekl::ArrayAttr attr) {
-            return ekl::ArrayAttr::get(output, attr.getStack());
-        })
-        .Default(ekl::ArrayAttr{});
-}
-
-[[nodiscard]] static LiteralAttr unify(LiteralAttr input, LiteralType output)
-{
-    return llvm::TypeSwitch<LiteralType, LiteralAttr>(output)
-        .Case([&](ScalarType type) -> LiteralAttr {
-            if (const auto attr = llvm::dyn_cast<ScalarAttr>(input))
-                return unify(attr, type);
-            return {};
-        })
-        .Case([&](ArrayType type) { return unify(input, type); })
-        .Default(LiteralAttr{});
-}
-
-OpFoldResult UnifyOp::fold(UnifyOp::FoldAdaptor adaptor)
-{
-    const auto output =
-        llvm::dyn_cast_if_present<LiteralType>(getTypeBound(getType()));
-    const auto input =
-        llvm::dyn_cast_if_present<LiteralAttr>(adaptor.getInput());
-    if (output && input) return ::unify(input, output);
-    return {};
-}
-
-LogicalResult UnifyOp::typeCheck(AbstractTypeChecker &typeChecker)
-{
-    TypeCheckingAdaptor adaptor(typeChecker, *this);
-
-    Type resultTy;
-    return adaptor.require(getInput(), getType().getTypeBound(), resultTy);
-}
-
-//===----------------------------------------------------------------------===//
-// BroadcastOp implementation
-//===----------------------------------------------------------------------===//
-
-void BroadcastOp::build(
-    OpBuilder &builder,
-    OperationState &state,
-    Value input,
-    ExtentRange extents,
-    Type resultBound)
-{
-    const auto extentsAttr = DenseI64ArrayAttr::get(
-        builder.getContext(),
-        ArrayRef<int64_t>(
-            reinterpret_cast<const int64_t *>(extents.data()),
-            extents.size()));
-
-    state.addOperands({input});
-    state.addAttribute(getExtentsAttrName(state.name), extentsAttr);
-    state.addTypes({ExpressionType::get(builder.getContext(), resultBound)});
-}
-
-LogicalResult BroadcastOp::typeCheck(AbstractTypeChecker &typeChecker)
-{
-    TypeCheckingAdaptor adaptor(typeChecker, *this);
-
-    // TODO: Find a safer way to do this.
-    const auto extents = ExtentRange(
-        std::bit_cast<const extent_t *>(getExtents().data()),
-        getExtents().size());
-
-    ArrayType resultTy;
-    if (auto contra = adaptor.broadcast(getInput(), extents, resultTy))
-        return contra;
-
-    return adaptor.refineBound(getResult(), resultTy);
-}
-
-//===----------------------------------------------------------------------===//
-// CoerceOp implementation
-//===----------------------------------------------------------------------===//
-
-LogicalResult CoerceOp::typeCheck(AbstractTypeChecker &typeChecker)
-{
-    TypeCheckingAdaptor adaptor(typeChecker, *this);
-
-    return adaptor.coerce(getInput(), getType());
+    if (!isExpression()) return {};
+    return llvm::cast<YieldOp>(getElseBranch()->getTerminator())
+        .getExpression();
 }
 
 //===----------------------------------------------------------------------===//
 // LiteralOp implementation
 //===----------------------------------------------------------------------===//
 
-void LiteralOp::build(
-    OpBuilder &builder,
-    OperationState &state,
-    LiteralAttr value)
-{
-    state.addTypes(
-        {ExpressionType::get(builder.getContext(), value.getType())});
-    state.addAttribute(getLiteralAttrName(state.name), value);
-}
-
 LogicalResult LiteralOp::verify()
 {
-    if (getType().getTypeBound() != getLiteral().getType())
-        return emitOpError() << "expected " << getLiteral().getType()
-                             << ", but got " << getType().getTypeBound();
+    if (!isSubtype(getValue().getType(), getType().getTypeBound()))
+        return emitOpError()
+            << getType().getTypeBound() << " is not a supertype of "
+            << getValue().getType();
 
     return success();
 }
 
-OpFoldResult LiteralOp::fold(LiteralOp::FoldAdaptor) { return getLiteral(); }
-
-LogicalResult LiteralOp::inferReturnTypes(
-    MLIRContext *context,
-    std::optional<Location>,
-    ValueRange,
-    DictionaryAttr attributes,
-    OpaqueProperties,
-    RegionRange,
-    SmallVectorImpl<Type> &inferredReturnTypes)
-{
-    const auto literal = attributes.getAs<LiteralAttr>(getAttributeNames()[0]);
-    if (!literal) return failure();
-
-    inferredReturnTypes.push_back(
-        ExpressionType::get(context, literal.getType()));
-    return success();
-}
+OpFoldResult LiteralOp::fold(LiteralOp::FoldAdaptor) { return getValue(); }
 
 //===----------------------------------------------------------------------===//
-// GetGlobalOp implementation
+// GetStaticOp implementation
 //===----------------------------------------------------------------------===//
 
-void GetGlobalOp::build(
+void GetStaticOp::build(
     OpBuilder &builder,
     OperationState &state,
-    GlobalOp global)
+    StaticOp target)
 {
     state.addTypes(
-        {ExpressionType::get(builder.getContext(), global.getType())});
+        {ExpressionType::get(builder.getContext(), target.getType())});
     state.addAttribute(
-        getGlobalNameAttrName(state.name),
-        FlatSymbolRefAttr::get(global.getNameAttr()));
+        getTargetNameAttrName(state.name),
+        FlatSymbolRefAttr::get(target.getNameAttr()));
 }
 
-LogicalResult GetGlobalOp::verifySymbolUses(SymbolTableCollection &symbolTable)
+LogicalResult GetStaticOp::verifySymbolUses(SymbolTableCollection &symbolTable)
 {
     auto targetOp =
-        symbolTable.lookupNearestSymbolFrom(*this, getGlobalNameAttr());
-    auto globalOp = llvm::dyn_cast_if_present<GlobalOp>(targetOp);
-    if (!globalOp) {
+        symbolTable.lookupNearestSymbolFrom(*this, getTargetNameAttr());
+    auto staticOp = llvm::dyn_cast_if_present<StaticOp>(targetOp);
+    if (!staticOp) {
         auto diag = emitOpError("'")
-                 << getGlobalName() << "' does not reference a global symbol";
+                 << getTargetName() << "' does not reference a static variable";
         if (targetOp)
-            diag.attachNote(targetOp->getLoc())
-                << "references this declaration";
-
+            diag.attachNote(targetOp->getLoc()) << "references this symbol";
         return diag;
     }
 
-    if (!isSubtype(getType().getTypeBound(), globalOp.getType())) {
+    if (!isSubtype(getType().getTypeBound(), staticOp.getType())) {
         auto diag = emitOpError()
                  << getType().getTypeBound() << " is not a subtype of "
-                 << globalOp.getType();
+                 << staticOp.getType();
         diag.attachNote(targetOp->getLoc()) << "symbol declared here";
         return diag;
     }
@@ -893,47 +881,65 @@ LogicalResult GetGlobalOp::verifySymbolUses(SymbolTableCollection &symbolTable)
     return success();
 }
 
+LogicalResult GetStaticOp::typeCheck(AbstractTypeChecker &)
+{
+    return success();
+}
+
 //===----------------------------------------------------------------------===//
 // SubscriptOp implementation
 //===----------------------------------------------------------------------===//
 
-[[nodiscard]] Operation *getOwner(Value value)
+OpFoldResult SubscriptOp::fold(SubscriptOp::FoldAdaptor adaptor)
 {
-    if (const auto argument = llvm::dyn_cast<BlockArgument>(value))
-        return argument.getOwner()->getParentOp();
-    return llvm::cast<OpResult>(value).getOwner();
+    if (!isSpeculatable(*this)) return {};
+
+    // Must have constant array.
+    const auto array =
+        llvm::dyn_cast_if_present<ekl::ArrayAttr>(adaptor.getArray());
+    if (!array) return {};
+
+    const auto bounds = array.getType().getExtents();
+    if (adaptor.getSubscripts().size() > bounds.size()) return {};
+
+    // Must be constant index values only.
+    SmallVector<extent_t> indices;
+    for (auto [attr, bound] :
+         llvm::zip_first(adaptor.getSubscripts(), bounds)) {
+        const auto indexAttr = llvm::dyn_cast_if_present<ekl::IndexAttr>(attr);
+        if (!indexAttr || indexAttr.getValue() >= bound) return {};
+        indices.push_back(indexAttr.getValue());
+    }
+
+    // Perform the subscript operation.
+    return array.subscript(indices);
 }
 
-[[nodiscard]] static bool isIndexArg(Value value)
+[[nodiscard]] static BlockArgument getInferrableIndex(Value value)
 {
-    assert(value);
-
     // Must be a block argument.
     const auto argument = llvm::dyn_cast<BlockArgument>(value);
-    if (!argument) return false;
+    if (!argument) return {};
 
-    // Must be from the map region of an AssocOp or ReduceOp.
+    // Must be from the map region of an AssocOp.
     const auto owner = argument.getOwner()->getParentOp();
-    if (!owner) return false;
-    if (llvm::isa<AssocOp>(owner)) return true;
-    if (llvm::isa<ReduceOp>(owner))
-        return argument.getOwner()->getParent()->getRegionNumber() == 0;
-
-    return false;
+    if (!llvm::isa_and_present<AssocOp>(owner)) return {};
+    return argument;
 }
 
 static FailureOr<ekl::IndexType> meetIndexBound(
     AbstractTypeChecker &typeChecker,
-    Expression expr,
+    BlockArgument index,
     uint64_t bound)
 {
     // Update the bound on the index value, which will fail if there is already
     // a different bound.
-    const auto type = ekl::IndexType::get(expr.getContext(), bound);
-    if (failed(typeChecker.meetBound(expr, type))) return failure();
+    const auto type = ekl::IndexType::get(index.getContext(), bound);
+    if (failed(typeChecker.meetBound(llvm::cast<Expression>(index), type)))
+        return failure();
 
     // This invalidates the owner as well.
-    typeChecker.invalidate(getOwner(expr));
+    typeChecker.invalidate(index.getParentRegion()->getParentOp());
     return type;
 }
 
@@ -950,7 +956,7 @@ static Contradiction typeCheckSubscripts(
         bounds.push_back(bound);
 
         if (!bound) {
-            if (isIndexArg(subscript)) {
+            if (getInferrableIndex(subscript)) {
                 // Will be inferred later.
                 continue;
             }
@@ -984,22 +990,16 @@ static Contradiction typeCheckSubscripts(
         return diag;
     }
 
-    if (ellipsis && unbounded) {
-        // We can't resolve the ellipsis yet.
-        return Contradiction::indeterminate();
-    }
-
-    return Contradiction::none();
+    return unbounded ? Contradiction::indeterminate() : Contradiction::none();
 }
 
 LogicalResult SubscriptOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
-    // Array operand must be an array or reference type.
-    ContiguousType arrayTy;
-    if (auto contra =
-            adaptor.require(getArray(), arrayTy, "array or reference"))
+    // Array operand must be an array type.
+    ArrayType arrayTy;
+    if (auto contra = adaptor.require(getArray(), arrayTy, "array"))
         return contra;
 
     // Type check the subscripts first, to allow ellipsis resolving.
@@ -1014,20 +1014,21 @@ LogicalResult SubscriptOp::typeCheck(AbstractTypeChecker &typeChecker)
     for (auto [idx, value] : llvm::enumerate(getSubscripts())) {
         auto bound = subscriptTys[idx];
         if (!bound) {
-            assert(isIndexArg(value));
+            const auto index = getInferrableIndex(value);
+            assert(index);
 
-            // The subscript type checker let this through because we can infer
-            // it from the array extents.
+            // The subscript type checker let this through because it can be
+            // inferred from the array extents here.
             const auto meet = meetIndexBound(
                 typeChecker,
-                llvm::cast<Expression>(value),
+                index,
                 arrayTy.getExtent(sourceDim) - 1UL);
             if (failed(meet)) return failure();
             bound = *meet;
             assert(bound);
         }
         if (llvm::isa<ExtentType>(bound)) {
-            // We insert a new unit dimension.
+            // Insert a new unit dimension.
             extents.push_back(1UL);
             continue;
         }
@@ -1039,13 +1040,13 @@ LogicalResult SubscriptOp::typeCheck(AbstractTypeChecker &typeChecker)
                 [](Type type) {
                     return !type || !llvm::isa<ExtentType>(type);
                 }));
-            // Insert the identity indexer until we bind enough dimensions.
+            // Insert the identity indexer until enough dimensions are bound.
             while (remaining < (arrayTy.getNumExtents() - sourceDim))
                 extents.push_back(arrayTy.getExtent(sourceDim++));
             continue;
         }
 
-        // For all other kinds of subscripts, we bind 1 source dimension.
+        // For all other kinds of subscripts, bind 1 source dimension.
         if (sourceDim == arrayTy.getNumExtents()) {
             auto diag = emitError() << "exceeded number of array extents ("
                                     << arrayTy.getNumExtents() << ")";
@@ -1053,7 +1054,7 @@ LogicalResult SubscriptOp::typeCheck(AbstractTypeChecker &typeChecker)
             return diag;
         }
         if (llvm::isa<IdentityType>(bound)) {
-            // We map this dimension using the identity.
+            // Map this dimension using the identity.
             extents.push_back(arrayTy.getExtent(sourceDim++));
             continue;
         }
@@ -1076,40 +1077,34 @@ LogicalResult SubscriptOp::typeCheck(AbstractTypeChecker &typeChecker)
         concat(extents, getExtents(bound).value_or(ExtentRange{}));
     }
 
-    // For partial subscripting, we append all the remaining dimensions.
+    // For partial subscripting, append all the remaining dimensions.
     concat(extents, arrayTy.getExtents().drop_front(sourceDim));
 
-    // The result is an array with the inferred extents, decaying to a scalar.
-    return adaptor.refineBound(
-        getResult(),
-        decayToScalar(applyReference(
-            arrayTy,
-            ArrayType::get(
-                llvm::cast<ScalarType>(arrayTy.getScalarType()),
-                extents))));
-}
-
-//===----------------------------------------------------------------------===//
-// YieldOp implementation
-//===----------------------------------------------------------------------===//
-
-LogicalResult YieldOp::typeCheck(AbstractTypeChecker &typeChecker)
-{
-    // Propagate this event to the parent.
-    if (const auto parent = (*this)->getParentOp())
-        typeChecker.invalidate(parent);
-
-    return success();
+    // The result is an array with the inferred extents, decaying to a scalar
+    // if the extents are empty.
+    Type resultTy = arrayTy.getScalarType();
+    if (!extents.empty()) resultTy = ArrayType::get(resultTy, extents);
+    return adaptor.refineBound(getResult(), resultTy);
 }
 
 //===----------------------------------------------------------------------===//
 // StackOp implementation
 //===----------------------------------------------------------------------===//
 
+LogicalResult StackOp::verify()
+{
+    if (getOperands().empty())
+        return emitOpError() << "requires at least 1 operand";
+
+    return success();
+}
+
 OpFoldResult StackOp::fold(StackOp::FoldAdaptor adaptor)
 {
+    if (!isSpeculatable(*this)) return {};
+
     const auto arrayTy =
-        llvm::dyn_cast_if_present<ArrayType>(getTypeBound(getType()));
+        llvm::dyn_cast_if_present<ArrayType>(getType().getTypeBound());
     if (!arrayTy) return {};
     if (llvm::count(adaptor.getOperands(), Attribute{}) > 0) return {};
 
@@ -1120,80 +1115,134 @@ LogicalResult StackOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
-    // The operands must all unify or broadcast together.
-    Type unifiedTy;
+    // The operands must all broadcast and unify together.
+    BroadcastType unifiedTy;
     if (auto contra = adaptor.broadcastAndUnify(getOperands(), unifiedTy))
         return contra;
-
-    // Its easier to just decay pseudo-scalar arrays now.
-    unifiedTy = decayToScalar(unifiedTy);
-
-    // The unified type must have a scalar type.
-    const auto scalarTy = getScalarType(unifiedTy);
-    if (!scalarTy)
-        return emitError()
-            << "can't stack values of non-scalar type " << unifiedTy;
 
     // The result extents are determined by the unified extents, prepended by
     // the number of stacked atoms.
     const auto resultExtents = concat(
         {static_cast<uint64_t>(getOperands().size())},
-        getExtents(unifiedTy).value_or(ExtentRange{}));
-    return adaptor.refineBound(
-        getResult(),
-        ArrayType::get(scalarTy, resultExtents));
+        unifiedTy.getExtents());
+    return adaptor.refineBound(getResult(), unifiedTy.cloneWith(resultExtents));
+}
+
+//===----------------------------------------------------------------------===//
+// YieldOp implementation
+//===----------------------------------------------------------------------===//
+
+LogicalResult YieldOp::typeCheck(AbstractTypeChecker &typeChecker)
+{
+    // When this op is invalidated, the parent should update as well.
+    if (const auto parent = (*this)->getParentOp())
+        typeChecker.invalidate(parent);
+
+    return success();
 }
 
 //===----------------------------------------------------------------------===//
 // AssocOp implementation
 //===----------------------------------------------------------------------===//
 
-static LogicalResult typeCheckMap(
+void AssocOp::build(
+    OpBuilder &builder,
+    OperationState &state,
+    unsigned numExtents,
+    FunctorBuilderRef map)
+{
+    const auto unboundedTy = ExpressionType::get(builder.getContext());
+
+    auto &functor = state.addRegion()->emplaceBlock();
+    state.addTypes({unboundedTy});
+
+    const auto loc = builder.getUnknownLoc();
+    while (numExtents-- > 0U) functor.addArgument(unboundedTy, loc);
+
+    if (map) {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(&functor);
+        map(builder, state.location, functor.getArguments());
+    }
+}
+
+void AssocOp::build(
+    OpBuilder &builder,
+    OperationState &state,
+    ExtentRange extents,
+    FunctorBuilderRef map)
+{
+    auto &functor = state.addRegion()->emplaceBlock();
+    state.addTypes({ExpressionType::get(builder.getContext())});
+
+    const auto loc = builder.getUnknownLoc();
+    for (auto extent : extents)
+        functor.addArgument(
+            ExpressionType::get(
+                builder.getContext(),
+                ekl::IndexType::get(builder.getContext(), extent - 1UL)),
+            loc);
+
+    if (map) {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(&functor);
+        map(builder, state.location, functor.getArguments());
+    }
+}
+
+void AssocOp::build(
+    OpBuilder &builder,
+    OperationState &state,
+    ArrayType resultBound,
+    FunctorBuilderRef map)
+{
+    const auto extents = resultBound ? resultBound.getExtents() : ExtentRange{};
+    build(builder, state, extents, map);
+    state.types[0] = ExpressionType::get(builder.getContext(), resultBound);
+}
+
+OpFoldResult AssocOp::fold(AssocOp::FoldAdaptor)
+{
+    if (!isSpeculatable(*this)) return {};
+
+    // If the yielded expression was folded to a scalar, a splat can be derived.
+    const auto expr = getMapExpression();
+    ScalarAttr value;
+    if (!matchPattern(expr, m_Constant(&value))) return {};
+    return ekl::ArrayAttr::get(
+        llvm::cast<ArrayType>(getType().getTypeBound()),
+        value);
+}
+
+static Contradiction typeCheckMap(
     TypeCheckingAdaptor &adaptor,
-    Region &map,
+    Block *map,
     Type &yieldTy,
-    SmallVectorImpl<extent_t> &extents,
-    bool &validExtents)
+    SmallVectorImpl<extent_t> &extents)
 {
     // Ensure that all the arguments are indices and infer the extents.
-    validExtents = true;
-    for (auto arg : map.getArguments()) {
+    auto validExtents = true;
+    for (auto arg : map->getArguments()) {
         ekl::IndexType indexTy;
-        if (failed(
-                adaptor.require(llvm::cast<Expression>(arg), indexTy, "index")))
-            return failure();
-        if (!indexTy || indexTy.isUnbounded())
+        auto contra =
+            adaptor.require(llvm::cast<Expression>(arg), indexTy, "index");
+        if (failed(contra)) return contra;
+
+        if (!indexTy || indexTy.isUnbounded()) {
+            // The premise is contradicted already, but find more errors.
             validExtents = false;
-        else
+        } else
             extents.push_back(indexTy.getUpperBound() + 1UL);
     }
 
     // Obtain the yielded value type.
-    auto yield = llvm::cast<YieldOp>(&map.front().back());
-    yieldTy    = adaptor.getType(llvm::cast<Expression>(yield.getValue()));
-    return success();
-}
+    auto yield = llvm::cast<YieldOp>(map->getTerminator());
+    if (!(yieldTy = adaptor.getType(yield.getExpression())))
+        return Contradiction::indeterminate();
 
-LogicalResult AssocOp::verify() { return verifyFunctor(*this, getMap()); }
-
-OpFoldResult AssocOp::fold(AssocOp::FoldAdaptor)
-{
-    // Can't fold untyped operation.
-    if (!getType().getTypeBound()) return {};
-
-    // See if the yielded value was folded.
-    auto yield      = llvm::cast<YieldOp>(getMap().front().back());
-    const auto expr = llvm::cast<Expression>(yield.getValue());
-    Attribute value;
-    if (!matchPattern(expr, m_Constant(&value))) return {};
-
-    // If the extents are empty, we can return anything.
-    if (getMap().getNumArguments() == 0) return value;
-
-    // Otherwise, we must have yielded a scalar, which we can make a splat of.
-    return ekl::ArrayAttr::get(
-        llvm::cast<ArrayType>(getType().getTypeBound()),
-        llvm::cast<ScalarAttr>(value));
+    // If the extents were not inferred, abort.
+    return validExtents ? Contradiction::none()
+                        : Contradiction::indeterminate();
 }
 
 LogicalResult AssocOp::typeCheck(AbstractTypeChecker &typeChecker)
@@ -1203,37 +1252,37 @@ LogicalResult AssocOp::typeCheck(AbstractTypeChecker &typeChecker)
     // Type-check the map functor.
     Type yieldTy;
     SmallVector<extent_t> extents;
-    bool validExtents;
-    if (failed(typeCheckMap(adaptor, getMap(), yieldTy, extents, validExtents)))
-        return failure();
+    if (auto contra = typeCheckMap(adaptor, getMap(), yieldTy, extents))
+        return contra;
 
-    // Only if all of the above is known can we deduce the result type.
-    if (!validExtents || !yieldTy) return success();
-
-    // Refine the bound on the result.
-    if (extents.empty()) return adaptor.refineBound(getResult(), yieldTy);
-
+    // Determine the effective extents by concatenating what was declared with
+    // what was yielded by the functor.
     const auto yieldExtents = getExtents(yieldTy);
     if (failed(yieldExtents)) {
-        auto diag = emitError() << "expected scalar or array value";
-        diag.attachNote(getMap().front().back().getOperand(0).getLoc())
-            << "for this value";
+        auto diag = emitError() << "expected scalar or array";
+        diag.attachNote(getMapExpression().getLoc()) << "for this value";
         return diag;
     }
     concat(extents, *yieldExtents);
+
+    // The result is always an array type.
     return adaptor.refineBound(
         getResult(),
         ArrayType::get(getScalarType(yieldTy), extents));
 }
 
-static constexpr StringRef indexLetters = "ijklmnopqrstuvwxyz";
-
 void AssocOp::getAsmBlockArgumentNames(
     Region &region,
     OpAsmSetValueNameFn setName)
 {
+    static constexpr StringRef indexLetters = "ijklmnopqrstuvwxyz";
     for (auto &&[arg, name] : llvm::zip(region.getArguments(), indexLetters))
         setName(arg, StringRef(&name, 1));
+}
+
+Expression AssocOp::getMapExpression()
+{
+    return llvm::cast<YieldOp>(getMap()->getTerminator()).getExpression();
 }
 
 //===----------------------------------------------------------------------===//
@@ -1244,9 +1293,10 @@ void ZipOp::build(
     OpBuilder &builder,
     OperationState &state,
     ValueRange operands,
+    FunctorBuilderRef combinator,
     Type resultBound)
 {
-    auto &combinator = state.addRegion()->emplaceBlock();
+    auto &functor = state.addRegion()->emplaceBlock();
 
     state.addOperands(operands);
     state.addTypes({ExpressionType::get(builder.getContext(), resultBound)});
@@ -1255,40 +1305,22 @@ void ZipOp::build(
         operands.size(),
         ExpressionType::get(builder.getContext()));
     SmallVector<Location> locs(operands.size(), builder.getUnknownLoc());
-    combinator.addArguments(types, locs);
-}
+    functor.addArguments(types, locs);
 
-void ZipOp::build(
-    OpBuilder &builder,
-    OperationState &state,
-    ValueRange operands,
-    Location combineLoc,
-    OperationName combineOp,
-    Type resultBound)
-{
-    build(builder, state, operands, resultBound);
-    auto &combinator = state.regions.front()->front();
-
-    // Insert the combinator op, assuming that it is a regular ExpressionOp.
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(&combinator);
-    const auto result = builder
-                            .create(
-                                combineLoc,
-                                combineOp.getIdentifier(),
-                                combinator.getArguments(),
-                                {ExpressionType::get(builder.getContext())})
-                            ->getResult(0);
-    builder.create<YieldOp>(combineLoc, result);
+    if (combinator) {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(&functor);
+        combinator(builder, state.location, functor.getArguments());
+    }
 }
 
 LogicalResult ZipOp::verify()
 {
-    if (getCombinator().getNumArguments() != getNumOperands())
+    if (getCombinator()->getNumArguments() != getNumOperands())
         return emitOpError() << "expected " << getNumOperands()
-                             << " arguments to combinator block";
+                             << " arguments to combinator functor";
 
-    return verifyFunctor(*this, getCombinator());
+    return success();
 }
 
 LogicalResult ZipOp::typeCheck(AbstractTypeChecker &typeChecker)
@@ -1296,36 +1328,41 @@ LogicalResult ZipOp::typeCheck(AbstractTypeChecker &typeChecker)
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
     // The operands must broadcast together.
-    SmallVector<Type> operandTys;
-    if (auto contra = adaptor.broadcast(getOperands(), operandTys))
-        return contra;
+    SmallVector<Type> argTys;
+    if (auto contra = adaptor.broadcast(getOperands(), argTys)) return contra;
 
     // Refine the bounds on the combinator.
-    for (auto [arg, ty] :
-         llvm::zip_equal(getCombinator().getArguments(), operandTys)) {
-        if (failed(adaptor.refineBound(
-                llvm::cast<Expression>(arg),
-                getScalarType(ty))))
+    for (auto [idx, arg] : llvm::enumerate(getCombinator()->getArguments())) {
+        const auto expr = llvm::cast<Expression>(arg);
+        if (failed(adaptor.refineBound(expr, getScalarType(argTys[idx]))))
             return failure();
     }
 
-    // Get the value type that the combinator yields.
-    auto yield = llvm::cast<Expression>(
-        llvm::cast<YieldOp>(&getCombinator().front().back()).getValue());
+    const auto yieldTy = adaptor.getType(getCombinatorExpression());
+    if (!yieldTy) return success();
+    if (argTys.empty()) return adaptor.refineBound(getResult(), yieldTy);
 
-    // If there are no operands, we can produce anything.
-    if (getNumOperands() == 0) {
-        const auto resultTy = adaptor.getType(yield);
-        if (!resultTy) return success();
-        return adaptor.refineBound(getResult(), resultTy);
+    // Determine the effective extents by concatenating what was inferred with
+    // what was yielded by the functor.
+    const auto yieldExtents = getExtents(yieldTy);
+    if (failed(yieldExtents)) {
+        auto diag = emitError() << "expected scalar or array";
+        diag.attachNote(getCombinatorExpression().getLoc()) << "for this value";
+        return diag;
     }
 
-    // Otherwise, we must create an array.
-    ScalarType scalarTy;
-    if (auto contra = adaptor.require(yield, scalarTy, "scalar")) return contra;
+    // The result type copies extents from the arguments to the yielded scalar.
+    const auto exemplar = llvm::cast<BroadcastType>(argTys.front());
+    const auto extents  = concat(exemplar.getExtents(), *yieldExtents);
     return adaptor.refineBound(
         getResult(),
-        ArrayType::get(scalarTy, *getExtents(operandTys.front())));
+        exemplar.cloneWith(getScalarType(yieldTy)));
+}
+
+Expression ZipOp::getCombinatorExpression()
+{
+    return llvm::cast<YieldOp>(getCombinator()->getTerminator())
+        .getExpression();
 }
 
 //===----------------------------------------------------------------------===//
@@ -1335,49 +1372,32 @@ LogicalResult ZipOp::typeCheck(AbstractTypeChecker &typeChecker)
 void ReduceOp::build(
     OpBuilder &builder,
     OperationState &state,
-    Type resultBound)
+    Value array,
+    FunctorBuilderRef reduction,
+    Type resultBound,
+    Value init)
 {
-    state.addRegion()->emplaceBlock();
-    auto &reduction = state.addRegion()->emplaceBlock();
+    auto &functor = state.addRegion()->emplaceBlock();
 
+    state.addOperands({array});
+    if (init) state.addOperands({init});
     state.addTypes({ExpressionType::get(builder.getContext(), resultBound)});
 
-    const auto exprTy = ExpressionType::get(builder.getContext());
     const auto loc    = builder.getUnknownLoc();
-    reduction.addArguments({exprTy, exprTy}, {loc, loc});
-}
+    const auto exprTy = ExpressionType::get(builder.getContext());
+    functor.addArguments({exprTy, exprTy}, {loc, loc});
 
-void ReduceOp::build(
-    OpBuilder &builder,
-    OperationState &state,
-    Location reduceLoc,
-    OperationName reduceOp,
-    Type resultBound)
-{
-    build(builder, state, resultBound);
-    auto &reduction = state.regions.back()->front();
-
-    // Insert the reduction op, assuming that it is a regular ExpressionOp.
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(&reduction);
-    const auto result = builder
-                            .create(
-                                reduceLoc,
-                                reduceOp.getIdentifier(),
-                                reduction.getArguments(),
-                                {ExpressionType::get(builder.getContext())})
-                            ->getResult(0);
-    builder.create<YieldOp>(reduceLoc, result);
+    if (reduction) {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(&functor);
+        reduction(builder, state.location, functor.getArguments());
+    }
 }
 
 LogicalResult ReduceOp::verify()
 {
-    if (getReduction().getNumArguments() != 2)
+    if (getReduction()->getNumArguments() != 2)
         return emitOpError() << "expected 2 arguments to reduction block";
-
-    if (failed(verifyFunctor(*this, getMap()))
-        || failed(verifyFunctor(*this, getReduction())))
-        return failure();
 
     return success();
 }
@@ -1386,87 +1406,223 @@ LogicalResult ReduceOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
-    // Type-check the map functor.
-    ScalarType scalarTy;
-    SmallVector<extent_t> extents;
-    bool validExtents;
-    if (failed(
-            typeCheckMap(adaptor, getMap(), scalarTy, extents, validExtents)))
-        return failure();
-    if (!scalarTy) return success();
-
-    // Refine the bounds on the reduction functor.
-    if (failed(adaptor.refineBound(
-            llvm::cast<Expression>(getReduction().getArgument(0)),
-            scalarTy)))
-        return failure();
-    if (failed(adaptor.refineBound(
-            llvm::cast<Expression>(getReduction().getArgument(1)),
-            scalarTy)))
-        return failure();
-
-    // Check that the reduction functor yields a compatible scalar type.
-    ScalarType resultTy;
-    auto yield = llvm::cast<YieldOp>(&getReduction().front().back());
-    if (auto contra = adaptor.require(
-            llvm::cast<Expression>(yield.getValue()),
-            scalarTy,
-            resultTy))
+    ArrayType arrayTy;
+    if (auto contra = adaptor.require(getArray(), arrayTy, "array"))
         return contra;
 
-    // The result does not depend on the extents.
+    // The element expression must accept the array elements.
+    if (failed(adaptor.refineBound(
+            getElementExpression(),
+            arrayTy.getScalarType())))
+        return failure();
+
+    // Refine the bound on the accumulator expression.
+    if (const auto init = getInitExpression()) {
+        // The accumulator expression must accept the initializer.
+        const auto initTy = adaptor.getType(init);
+        if (!initTy) return success();
+        if (failed(adaptor.refineBound(getAccumulatorExpression(), initTy)))
+            return failure();
+    } else {
+        // The accumulator expression must accept array elements.
+        if (failed(adaptor.refineBound(
+                getAccumulatorExpression(),
+                arrayTy.getScalarType())))
+            return failure();
+    }
+
+    // The reduction expression must be accepted by the accumulator.
+    const auto accuTy = adaptor.getType(getAccumulatorExpression());
+    Type redTy;
+    if (auto contra = adaptor.require(getReductionExpression(), accuTy, redTy))
+        return contra;
+
+    // The result is the accumulator.
+    return adaptor.refineBound(getResult(), accuTy);
+}
+
+Expression ReduceOp::getReductionExpression()
+{
+    return llvm::cast<YieldOp>(getReduction()->getTerminator()).getExpression();
+}
+
+//===----------------------------------------------------------------------===//
+// ConstexprOp implementation
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ConstexprOp::fold(ConstexprOp::FoldAdaptor)
+{
+    if (!isSpeculatable(*this)) return {};
+
+    // Fold to the constant expression value.
+    LiteralAttr literal;
+    if (matchPattern(getExpression(), m_Constant(&literal))) return literal;
+    return {};
+}
+
+LogicalResult ConstexprOp::typeCheck(AbstractTypeChecker &typeChecker)
+{
+    TypeCheckingAdaptor adaptor(typeChecker, *this);
+
+    // Refine the bound to the yielded expression type.
+    const auto yieldTy = adaptor.getType(getExpression());
+    if (!yieldTy) return success();
+    return adaptor.refineBound(getResult(), yieldTy);
+}
+
+Expression ConstexprOp::getExpression()
+{
+    return llvm::cast<YieldOp>(getBody()->getTerminator()).getExpression();
+}
+
+//===----------------------------------------------------------------------===//
+// UnifyOp implementation
+//===----------------------------------------------------------------------===//
+
+OpFoldResult UnifyOp::fold(UnifyOp::FoldAdaptor adaptor)
+{
+    if (!isSpeculatable(*this)) return {};
+
+    // Attributes are covariant in the IR, no unification happens. The
+    // materializer will produce a LiteralOp with a different type.
+    return adaptor.getOperand();
+}
+
+LogicalResult UnifyOp::typeCheck(AbstractTypeChecker &typeChecker)
+{
+    TypeCheckingAdaptor adaptor(typeChecker, *this);
+
+    Type resultTy;
+    return adaptor.require(getOperand(), getType().getTypeBound(), resultTy);
+}
+
+//===----------------------------------------------------------------------===//
+// BroadcastOp implementation
+//===----------------------------------------------------------------------===//
+
+OpFoldResult BroadcastOp::fold(BroadcastOp::FoldAdaptor adaptor)
+{
+    if (!isSpeculatable(*this) || !adaptor.getOperand()) return {};
+
+    const auto resultTy = llvm::cast<ArrayType>(getType().getTypeBound());
+
+    // Fold scalar-to-array broadcasts.
+    if (const auto scalar = llvm::dyn_cast<ScalarAttr>(adaptor.getOperand()))
+        return ArrayAttr::get(resultTy, {scalar});
+    // Fold array-to-array broadcasts.
+    if (const auto array = llvm::dyn_cast<ekl::ArrayAttr>(adaptor.getOperand()))
+        return array.broadcastTo(resultTy.getExtents());
+
+    return {};
+}
+
+LogicalResult BroadcastOp::typeCheck(AbstractTypeChecker &typeChecker)
+{
+    TypeCheckingAdaptor adaptor(typeChecker, *this);
+
+    ArrayType resultTy;
+    if (auto contra = adaptor.broadcast(getOperand(), getExtents(), resultTy))
+        return contra;
+
     return adaptor.refineBound(getResult(), resultTy);
 }
 
-static constexpr StringRef reductionLetters = "abcdefgh";
-
-void ReduceOp::getAsmBlockArgumentNames(
-    Region &region,
-    OpAsmSetValueNameFn setName)
+DenseI64ArrayAttr
+BroadcastOp::getSignedExtentsAttr(MLIRContext *context, ExtentRange extents)
 {
-    if (region.getRegionNumber() == 0) {
-        for (auto &&[arg, name] :
-             llvm::zip(region.getArguments(), reductionLetters))
-            setName(arg, StringRef(&name, 1));
-        return;
-    }
+    return DenseI64ArrayAttr::get(
+        context,
+        ArrayRef<int64_t>(
+            reinterpret_cast<const int64_t *>(extents.data()),
+            extents.size()));
+}
 
-    assert(region.getRegionNumber() == 1);
-    setName(region.getArgument(0), "lhs");
-    setName(region.getArgument(1), "rhs");
+ExtentRange BroadcastOp::getExtents()
+{
+    return ExtentRange(
+        std::bit_cast<const extent_t *>(getSignedExtents().data()),
+        getSignedExtents().size());
+}
+
+//===----------------------------------------------------------------------===//
+// CoerceOp implementation
+//===----------------------------------------------------------------------===//
+
+LogicalResult CoerceOp::typeCheck(AbstractTypeChecker &typeChecker)
+{
+    TypeCheckingAdaptor adaptor(typeChecker, *this);
+
+    return adaptor.coerce(getOperand(), getType().getTypeBound());
 }
 
 //===----------------------------------------------------------------------===//
 // ChoiceOp implementation
 //===----------------------------------------------------------------------===//
 
+LogicalResult ChoiceOp::verify()
+{
+    if (getAlternatives().empty())
+        return emitOpError() << "requires at least 1 alternative";
+
+    return success();
+}
+
 LogicalResult ChoiceOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
-    Type unifiedTy;
-    if (auto contra = adaptor.broadcastAndUnify(
-            {getTrueValue(), getFalseValue()},
-            unifiedTy))
-        return contra;
-
-    ArrayType resultTy;
-    if (auto contra =
-            adaptor.broadcast(getCondition(), *getExtents(unifiedTy), resultTy))
-        return contra;
-
-    // The condition must be bool.
-    if (!llvm::isa<BoolType>(resultTy.getScalarType())) {
-        auto diag = emitError()
-                 << "expected bool, got " << resultTy.getScalarType();
-        diag.attachNote(getCondition().getLoc()) << "for this value";
+    // Check the selector type.
+    const auto selectorTy = adaptor.getType(getSelector());
+    if (!selectorTy) return success();
+    const auto choiceTy = getScalarType(selectorTy);
+    if (!choiceTy) {
+        auto diag = emitError() << "selector must be scalar or array";
+        diag.attachNote(getSelector().getLoc()) << "from this expression";
         return diag;
     }
 
-    // The result of the choice uses the unified scalar type.
-    resultTy = resultTy.cloneWith(getScalarType(unifiedTy));
-    // Get rid of pseudo-scalar arrays now.
-    return adaptor.refineBound(getResult(), decayToScalar(resultTy));
+    // Check the selector scalar type.
+    unsigned minArity = 1;
+    if (llvm::isa<BoolType>(choiceTy)) {
+        minArity = 2;
+    } else if (const auto indexTy = llvm::dyn_cast<ekl::IndexType>(choiceTy)) {
+        if (!indexTy.isUnbounded()) minArity = indexTy.getUpperBound() + 1UL;
+    } else {
+        auto diag = emitError() << "selector must be bool or index";
+        diag.attachNote(getSelector().getLoc()) << "from this expression";
+        return diag;
+    }
+
+    // Check the arity.
+    if (getAlternatives().size() < minArity) {
+        auto diag = emitError()
+                 << "too few alternatives (" << getAlternatives().size()
+                 << " < " << minArity << ")";
+        diag.attachNote(getSelector().getLoc()) << "for this selector";
+        return diag;
+    }
+
+    // Broadcast and unify the alternatives.
+    BroadcastType altTy;
+    if (auto contra = adaptor.broadcastAndUnify(getAlternatives(), altTy))
+        return contra;
+
+    // Determine the result extents by extending and broadcasting.
+    auto resultExtents = llvm::to_vector(*getExtents(selectorTy));
+    if (resultExtents.size() < altTy.getExtents().size())
+        resultExtents.append(
+            altTy.getExtents().size() - resultExtents.size(),
+            1UL);
+    if (failed(ekl::broadcast(resultExtents, altTy.getExtents()))) {
+        auto diag = emitError() << "can't broadcast [";
+        llvm::interleaveComma(resultExtents, diag);
+        diag << "] and " << altTy << "together";
+        diag.attachNote(getSelector().getLoc()) << "for this selector";
+        return diag;
+    }
+
+    // The result type has the alternative scalar type and the inferred extents.
+    return adaptor.refineBound(getResult(), altTy.cloneWith(resultExtents));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1492,17 +1648,16 @@ LogicalResult CompareOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
-    Type unifiedTy;
+    BroadcastType unifiedTy;
     if (auto contra = adaptor.broadcastAndUnify(getOperands(), unifiedTy))
         return contra;
 
     // Unified scalar type must be a number (or bool for eq/ne).
-    const auto scalarTy = getScalarType(unifiedTy);
-    if (!llvm::isa<NumericType>(scalarTy)) {
+    if (!llvm::isa<NumericType>(unifiedTy.getScalarType())) {
         switch (getKind()) {
         case RelationKind::Equivalent:
         case RelationKind::Antivalent:
-            if (llvm::isa<BoolType>(scalarTy)) {
+            if (llvm::isa<BoolType>(unifiedTy.getScalarType())) {
                 // Equivalence/Antivalence of booleans is also well-defined.
                 break;
             }
@@ -1516,7 +1671,7 @@ LogicalResult CompareOp::typeCheck(AbstractTypeChecker &typeChecker)
     // The result is boolean with the unified extents.
     return adaptor.refineBound(
         getResult(),
-        applyExtents(unifiedTy, BoolType::get(getContext())));
+        unifiedTy.cloneWith(BoolType::get(getContext())));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1526,22 +1681,14 @@ LogicalResult CompareOp::typeCheck(AbstractTypeChecker &typeChecker)
 static LogicalResult typeCheckLogicalOp(TypeCheckingAdaptor &adaptor)
 {
     // The operands must all unify or broadcast together.
-    Type unifiedTy;
+    LogicType unifiedTy;
     if (auto contra = adaptor.broadcastAndUnify(
             adaptor.getParent()->getOperands(),
-            unifiedTy))
+            unifiedTy,
+            "logic type"))
         return contra;
 
-    // Its easier to just decay pseudo-scalar arrays now.
-    unifiedTy = decayToScalar(unifiedTy);
-
-    // The unified scalar type must be bool.
-    const auto scalarTy = getScalarType(unifiedTy);
-    if (!llvm::isa_and_present<BoolType>(scalarTy))
-        return adaptor.getParent()->emitError()
-            << "expected bool, but got " << unifiedTy;
-
-    // The result type is the unified type.
+    // The result type is the unified type, decayed to a scalar.
     return adaptor.refineBound(
         llvm::cast<Expression>(adaptor.getParent()->getResult(0)),
         unifiedTy);
@@ -1574,24 +1721,16 @@ static LogicalResult typeCheckArithmeticOp(
     function_ref<uint64_t(ArrayRef<uint64_t>)> combineIndexBounds)
 {
     // The operands must all unify or broadcast together.
-    Type unifiedTy;
+    ArithmeticType unifiedTy;
     if (auto contra = adaptor.broadcastAndUnify(
             adaptor.getParent()->getOperands(),
-            unifiedTy))
+            unifiedTy,
+            "arithmetic type"))
         return contra;
-
-    // Its easier to just decay pseudo-scalar arrays now.
-    unifiedTy = decayToScalar(unifiedTy);
-
-    // The unified scalar type must be numeric.
-    const auto scalarTy = getScalarType(unifiedTy);
-    if (!llvm::isa<NumericType>(scalarTy))
-        return adaptor.getParent()->emitError()
-            << "expected number, but got " << unifiedTy;
 
     // Arithmetic operations need to properly update the upper bounds on the
     // types of index values they produce.
-    if (llvm::isa<ekl::IndexType>(scalarTy)) {
+    if (llvm::isa<ekl::IndexType>(unifiedTy.getScalarType())) {
         const auto operandUpperBounds = llvm::to_vector(llvm::map_range(
             adaptor.getParent()->getOperands(),
             [&](Value operand) {
@@ -1602,11 +1741,9 @@ static LogicalResult typeCheckArithmeticOp(
             }));
         return adaptor.refineBound(
             llvm::cast<Expression>(adaptor.getParent()->getResult(0)),
-            applyExtents(
-                unifiedTy,
-                ekl::IndexType::get(
-                    scalarTy.getContext(),
-                    combineIndexBounds(operandUpperBounds))));
+            unifiedTy.cloneWith(ekl::IndexType::get(
+                unifiedTy.getContext(),
+                combineIndexBounds(operandUpperBounds))));
     }
 
     // The result type is the unified type.
@@ -1631,6 +1768,8 @@ LogicalResult AddOp::typeCheck(AbstractTypeChecker &typeChecker)
     return typeCheckArithmeticOp(
         adaptor,
         [](ArrayRef<uint64_t> bounds) -> uint64_t {
+            if (llvm::count(bounds, ekl::IndexType::kUnbounded) > 0)
+                return ekl::IndexType::kUnbounded;
             return bounds[0] + bounds[1];
         });
 }
@@ -1649,6 +1788,8 @@ LogicalResult MultiplyOp::typeCheck(AbstractTypeChecker &typeChecker)
     return typeCheckArithmeticOp(
         adaptor,
         [](ArrayRef<uint64_t> bounds) -> uint64_t {
+            if (llvm::count(bounds, ekl::IndexType::kUnbounded) > 0)
+                return ekl::IndexType::kUnbounded;
             return bounds[0] * bounds[1];
         });
 }
@@ -1666,7 +1807,11 @@ LogicalResult RemainderOp::typeCheck(AbstractTypeChecker &typeChecker)
     TypeCheckingAdaptor adaptor(typeChecker, *this);
     return typeCheckArithmeticOp(
         adaptor,
-        [](ArrayRef<uint64_t> bounds) -> uint64_t { return bounds[1] - 1; });
+        [](ArrayRef<uint64_t> bounds) -> uint64_t {
+            if (bounds[1] == ekl::IndexType::kUnbounded)
+                return ekl::IndexType::kUnbounded;
+            return bounds[1] - 1;
+        });
 }
 
 LogicalResult PowerOp::typeCheck(AbstractTypeChecker &typeChecker)
@@ -1714,10 +1859,12 @@ LogicalResult TensorProductOp::typeCheck(AbstractTypeChecker &typeChecker)
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
     // The inputs must be tensors that unify to the same scalar type.
-    ekl::TensorType lhsTy;
-    if (auto contra = adaptor.require(getLhs(), lhsTy, "tensor")) return contra;
-    ekl::TensorType rhsTy;
-    if (auto contra = adaptor.require(getRhs(), rhsTy, "tensor")) return contra;
+    ekl::ArithmeticType lhsTy;
+    if (auto contra = adaptor.require(getLhs(), lhsTy, "arithmetic type"))
+        return contra;
+    ekl::ArithmeticType rhsTy;
+    if (auto contra = adaptor.require(getRhs(), rhsTy, "arithmetic type"))
+        return contra;
     NumericType scalarTy;
     if (auto contra = adaptor.unify(
             {lhsTy.getScalarType(), rhsTy.getScalarType()},

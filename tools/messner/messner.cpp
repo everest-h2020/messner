@@ -41,23 +41,6 @@ static llvm::cl::opt<std::string> outputFilename(
     llvm::cl::value_desc("filename"),
     llvm::cl::init("-"));
 
-/*
-// Prepare the pass manager, applying command-line and reproducer options.
-  PassManager pm(op.get()->getName(), PassManager::Nesting::Implicit);
-  pm.enableVerifier(config.shouldVerifyPasses());
-  if (failed(applyPassManagerCLOptions(pm)))
-    return failure();
-  pm.enableTiming(timing);
-  if (config.shouldRunReproducer() && failed(reproOptions.apply(pm)))
-    return failure();
-  if (failed(config.setupPassPipeline(pm)))
-    return failure();
-
-  // Run the pipeline.
-  if (failed(pm.run(*op)))
-    return failure();
-*/
-
 OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
 {
     // Create the result ModuleOp and put the program in it.
@@ -73,8 +56,11 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
     if (failed(applyPassManagerCLOptions(passManager))) return {};
 
     // TODO: Populate the pass pipeline.
-    passManager.nest(ProgramOp::getOperationName())
-        .addNestedPass<KernelOp>(createLowerPass());
+    auto &program = passManager.nest<ProgramOp>();
+    auto &kernel  = program.nest<KernelOp>();
+    kernel.addPass(createLowerPass());
+    kernel.addPass(createDecayNumberPass());
+    kernel.addPass(createHomogenizePass());
 
     // Run the pass manager on the module.
     if (failed(passManager.run(result->getOperation()))) return {};

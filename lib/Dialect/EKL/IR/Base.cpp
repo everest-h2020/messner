@@ -42,14 +42,6 @@ struct EKLAsmInterface : OpAsmDialectInterface {
                 os << "array";
                 return AliasResult::OverridableAlias;
             })
-            .Case([&](InitializerAttr initAttr) {
-                if (static_cast<std::size_t>(initAttr.getFlattened().size())
-                    <= kInlineArrayLength)
-                    return AliasResult::NoAlias;
-
-                os << "init";
-                return AliasResult::OverridableAlias;
-            })
             .Default(AliasResult::NoAlias);
     }
 };
@@ -79,9 +71,13 @@ Operation *EKLDialect::materializeConstant(
     // LiteralOp only materializes expression values.
     if (const auto exprTy = llvm::dyn_cast<ExpressionType>(type)) {
         if (const auto literalAttr = llvm::dyn_cast<LiteralAttr>(attr)) {
-            if (exprTy.getTypeBound() != literalAttr.getType()) return nullptr;
+            if (!isSubtype(literalAttr.getType(), exprTy.getTypeBound()))
+                return nullptr;
 
-            return builder.create<LiteralOp>(location, literalAttr);
+            return builder.create<LiteralOp>(
+                location,
+                literalAttr,
+                exprTy.getTypeBound());
         }
     }
 

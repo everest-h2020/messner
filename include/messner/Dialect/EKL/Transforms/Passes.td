@@ -22,13 +22,32 @@ def TypeCheck : Pass<"ekl-type-check", "::mlir::ekl::KernelOp"> {
     let constructor = "::mlir::ekl::createTypeCheckPass()";
 }
 
-def Lower : Pass<"ekl-lower", "::mlir::ekl::KernelOp"> {
-    let summary = "Lowers EKL operations to simpler ones";
+def DecayNumber : Pass<"ekl-decay-number", "::mlir::ekl::KernelOp"> {
+    let summary = "Decays arithmetic operations to the highest ABI precision";
     let description = [{
-        The `ekl-lower` pass visits `ekl.program` operations and rewrites as
-        many complex EKL operations to simpler ones as possible. In essence,
-        this is a canonicalization pass that is destructive w.r.t. the EKL
-        program AST.
+        The `ekl-decay-number` pass visits `ekl.kernel` operations and finds
+        arithmetic operations that combine `!ekl.number`-typed operands with
+        fixed-precision operands. It then decays the `!ekl.number` operands to
+        the most precise of the other types.
+    }];
+
+    let constructor = "::mlir::ekl::createDecayNumberPass()";
+}
+
+def Homogenize : Pass<"ekl-homogenize", "::mlir::ekl::KernelOp"> {
+    let summary = "Rewrites EKL expression to remove implicit behavior";
+    let description = [{
+        The `ekl-homogenize` pass visits `ekl.kernel` operations and eliminates
+        all the implicit casts.
+    }];
+
+    let constructor = "::mlir::ekl::createHomogenizePass()";
+}
+
+def Lower : Pass<"ekl-lower", "::mlir::ekl::KernelOp"> {
+    let summary = "TODO";
+    let description = [{
+        TODO
     }];
 
     let constructor = "::mlir::ekl::createLowerPass()";

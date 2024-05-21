@@ -3,6 +3,8 @@
 /// @file
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
 
+#include "messner/Dialect/EKL/Transforms/TypeCheck.h"
+
 #include "messner/Dialect/EKL/IR/EKL.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
@@ -28,57 +30,6 @@ namespace mlir::ekl {
 //===----------------------------------------------------------------------===//
 
 namespace {
-
-struct TypeChecker : AbstractTypeChecker {
-    [[nodiscard]] virtual Type getType(Expression expr) const override
-    {
-        if (const auto deduced = m_context.lookup(expr)) return deduced;
-        return getTypeBound(expr);
-    }
-
-    virtual LogicalResult refineBound(Expression expr, Type incoming) override;
-
-    virtual LogicalResult meetBound(Expression expr, Type incoming) override;
-
-    virtual void invalidate(Operation *op) override
-    {
-        const auto expr = llvm::dyn_cast<TypeCheckOpInterface>(op);
-        if (!expr) return;
-
-        const auto [it, ok] = m_invalid.insert(expr);
-        if (ok)
-            LLVM_DEBUG(
-                llvm::dbgs() << "[TypeChecker] invalidated " << expr << "\n");
-    }
-
-    TypeCheckOpInterface popInvalid()
-    {
-        const auto it = m_invalid.begin();
-        if (it == m_invalid.end()) return nullptr;
-
-        const auto result = *it;
-        m_invalid.erase(it);
-        return result;
-    }
-
-    void applyToIR()
-    {
-        LLVM_DEBUG(
-            llvm::dbgs() << "[TypeChecker] applying " << m_context.size()
-                         << " deductions\n");
-
-        for (auto [expr, bound] : m_context) {
-            assert(bound);
-            expr.setType(ExpressionType::get(expr.getContext(), bound));
-        }
-        m_context.clear();
-    }
-
-private:
-    llvm::DenseMap<Expression, Type> m_context;
-    llvm::DenseSet<TypeCheckOpInterface> m_invalid;
-};
-
 struct TypeCheckPass : ekl::impl::TypeCheckBase<TypeCheckPass> {
     using TypeCheckBase::TypeCheckBase;
 
@@ -130,9 +81,74 @@ LogicalResult TypeChecker::meetBound(Expression expr, Type incoming)
         << "deduced type " << incoming << " is different from " << present;
 }
 
-//===----------------------------------------------------------------------===//
-// typeCheck implementation
-//===----------------------------------------------------------------------===//
+void TypeChecker::invalidate(Operation *op)
+{
+    const auto expr = llvm::dyn_cast<TypeCheckOpInterface>(op);
+    if (!expr) return;
+
+    const auto [it, ok] = m_invalid.insert(expr);
+    if (ok)
+        LLVM_DEBUG(
+            llvm::dbgs() << "[TypeChecker] invalidated " << expr << "\n");
+}
+
+LogicalResult TypeChecker::check(RewriterBase::Listener *listener)
+{
+    // Continue refining type bounds until a fixpoint is reached.
+    auto succeeded = true;
+    while (auto expr = popInvalid()) {
+        // Put the expression on the diagnostic stack.
+        ScopedDiagnosticHandler handler(
+            expr.getContext(),
+            [&](Diagnostic &diag) -> LogicalResult {
+                diag.attachNote(expr.getLoc())
+                    << "while type checking this expression";
+                return failure();
+            });
+
+        LLVM_DEBUG(llvm::dbgs() << "[TypeChecker] checking " << expr << "\n");
+        if (failed(expr.typeCheck(*this))) {
+            LLVM_DEBUG(llvm::dbgs() << "[TypeChecker] failed!\n");
+            succeeded = false;
+        }
+    }
+    if (!succeeded) return failure();
+
+    // Apply the deductions to the IR.
+    applyToIR(listener);
+    return success();
+}
+
+TypeCheckOpInterface TypeChecker::popInvalid()
+{
+    const auto it = m_invalid.begin();
+    if (it == m_invalid.end()) return nullptr;
+
+    const auto result = *it;
+    m_invalid.erase(it);
+    return result;
+}
+
+[[nodiscard]] Operation *getOwner(Expression expr)
+{
+    if (const auto result = llvm::dyn_cast<OpResult>(expr))
+        return result.getOwner();
+    return llvm::cast<BlockArgument>(expr).getParentRegion()->getParentOp();
+}
+
+void TypeChecker::applyToIR(RewriterBase::Listener *listener)
+{
+    LLVM_DEBUG(
+        llvm::dbgs()
+        << "[TypeChecker] applying " << m_context.size() << " deductions\n");
+
+    for (auto [expr, bound] : m_context) {
+        assert(bound);
+        if (listener) listener->notifyOperationModified(getOwner(expr));
+        expr.setType(ExpressionType::get(expr.getContext(), bound));
+    }
+    m_context.clear();
+}
 
 LogicalResult mlir::ekl::typeCheck(Operation *root)
 {
@@ -152,24 +168,7 @@ LogicalResult mlir::ekl::typeCheck(Operation *root)
     // Work is initialized by recursively invalidating all expressions.
     typeChecker.recursivelyInvalidate(root);
 
-    // Continue refining type bounds until a fixpoint is reached.
-    while (auto expr = typeChecker.popInvalid()) {
-        // Put the expression on the diagnostic stack.
-        ScopedDiagnosticHandler handler(
-            root->getContext(),
-            [&](Diagnostic &diag) -> LogicalResult {
-                diag.attachNote(expr.getLoc())
-                    << "while type checking this expression";
-                return failure();
-            });
-
-        LLVM_DEBUG(llvm::dbgs() << "[TypeChecker] checking " << expr << "\n");
-        if (failed(expr.typeCheck(typeChecker))) return failure();
-    }
-
-    // Apply the deductions to the IR.
-    typeChecker.applyToIR();
-    return success();
+    return typeChecker.check();
 }
 
 //===----------------------------------------------------------------------===//

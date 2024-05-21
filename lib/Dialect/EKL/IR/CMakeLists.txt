@@ -3,6 +3,7 @@ add_mlir_dialect_library(EKLDialect
         Base.cpp
         DiagHandler.cpp
         Ops.cpp
+        Traits.cpp
         Types.cpp
 
     DEPENDS

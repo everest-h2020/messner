@@ -21,7 +21,7 @@ LogicalResult LocalTypeChecker::refineBound(Expression expr, Type incoming)
 
     // Report this illegal refinement.
     auto [diag, isError] = report(expr);
-    diag << present << " is not a subtype of deduced type " << incoming;
+    diag << incoming << " is not a subtype of deduced type " << present;
     return success(!isError);
 }
 

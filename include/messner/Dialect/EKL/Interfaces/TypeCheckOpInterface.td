@@ -44,6 +44,19 @@ def EKL_TypeCheckOpInterface : OpInterface<"TypeCheckOpInterface"> {
             /*defaultImplementation=*/"">];
 
     let verify = [{ return impl::verifyTypeCheckOpInterface($_op); }];
+    // NOTE: Verify the op first, then verify this interface.
+    let verifyWithRegions = 1;
+
+    code extraTraitClassDeclaration = [{
+        /// Determines if the operation is fully typed.
+        ///
+        /// An operation is fully typed if it does not have any unbounded
+        /// expression operands or results.
+        [[nodiscard]] bool isFullyTyped()
+        {
+            return impl::isFullyTyped($_op);
+        }
+    }];
 }
 
 #endif

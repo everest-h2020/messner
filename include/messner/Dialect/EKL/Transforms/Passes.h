@@ -17,21 +17,28 @@ namespace mlir::ekl {
 
 //===----------------------------------------------------------------------===//
 
-/// Perform type checking for @p root and all of its descendants.
-///
-/// @pre    `root`
-///
-/// @param              root    Operation.
-///
-/// @return Whether type checking suceeded.
-LogicalResult typeCheck(Operation *root);
-
 /// Constructs the ekl-type-check pass.
 std::unique_ptr<Pass> createTypeCheckPass();
 
+/// Adds the ekl-decay-number patterns to @p patterns .
+///
+/// @param  [in,out]    patterns    RewritePatternSet.
+void populateDecayNumberPatterns(RewritePatternSet &patterns);
+
+/// Constructs the ekl-decay-number pass.
+std::unique_ptr<Pass> createDecayNumberPass();
+
+/// Adds the ekl-homogenize patterns to @p patterns .
+///
+/// @param  [in,out]    patterns    RewritePatternSet.
+void populateHomogenizePatterns(RewritePatternSet &patterns);
+
+/// Constructs the ekl-homogenize pass.
+std::unique_ptr<Pass> createHomogenizePass();
+
 /// Adds the ekl-lower patterns to @p patterns .
 ///
-/// @param  [out]       patterns    RewritePatternSet.
+/// @param  [in,out]    patterns    RewritePatternSet.
 void populateLowerPatterns(RewritePatternSet &patterns);
 
 /// Construct the ekl-lower pass.

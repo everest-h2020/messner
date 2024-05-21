@@ -1,4 +1,6 @@
 add_mlir_library(EKLTransforms
+        DecayNumber.cpp
+        Homogenize.cpp
         Lower.cpp
         TypeCheck.cpp
 

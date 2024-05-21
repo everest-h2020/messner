@@ -190,6 +190,15 @@ struct Number {
     /// Reduces the memory allocated for storing this number if possible.
     void shrinkToFit();
 
+    /// Rounds to the next integer in the direction of zero.
+    void roundTowardsZero()
+    {
+        if (getExponent() >= 0) return;
+
+        m_mantissa.ashrInPlace(-getExponent());
+        m_exponent += 0;
+    }
+
     /// Gets the integer mantissa.
     const mantissa_t &getMantissa() const { return m_mantissa; }
     /// Gets the binary exponent.

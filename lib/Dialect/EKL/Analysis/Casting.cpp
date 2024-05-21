@@ -92,7 +92,7 @@ mlir::ekl::broadcast(ArrayRef<Type> types, SmallVectorImpl<extent_t> &extents)
 {
     if (types.empty()) {
         // The empty worklist broadcasts to the scalar shape.
-        return BroadcastResult::Success;
+        return BroadcastResult::Scalar;
     }
 
     // The result is initialized using the first type's extents.
@@ -100,16 +100,22 @@ mlir::ekl::broadcast(ArrayRef<Type> types, SmallVectorImpl<extent_t> &extents)
     const auto frontExtents = getExtents(types.front());
     if (failed(frontExtents)) return BroadcastResult::Failure;
     concat(extents, *frontExtents);
+    auto result = llvm::isa<ScalarType>(types.front()) ? BroadcastResult::Scalar
+                                                       : BroadcastResult::Array;
 
     // Broadcast the result together with all remaining type's extents.
     for (auto type : types.drop_front()) {
         if (!type) return BroadcastResult::Unbounded;
+        if (llvm::isa<ScalarType>(type)) continue;
+
         const auto rhsExtents = getExtents(type);
         if (failed(rhsExtents) || failed(broadcast(extents, *rhsExtents)))
             return BroadcastResult::Failure;
+
+        result = BroadcastResult::Array;
     }
 
-    return BroadcastResult::Success;
+    return result;
 }
 
 BroadcastResult mlir::ekl::broadcast(MutableArrayRef<Type> types)
@@ -117,27 +123,16 @@ BroadcastResult mlir::ekl::broadcast(MutableArrayRef<Type> types)
     // Determine the extents of the broadcasted result.
     SmallVector<extent_t> extents;
     const auto result = broadcast(types, extents);
-    if (result != BroadcastResult::Success) {
-        // Propagate failure or unbounded.
-        return result;
+    switch (result) {
+    case BroadcastResult::Failure:
+    case BroadcastResult::Unbounded:
+    case BroadcastResult::Scalar:    return result;
+    default:                         break;
     }
 
     // Update all the types to their broadcasted type.
-    for (auto &type : types) {
-        if (const auto arrayTy = llvm::dyn_cast<ArrayType>(type)) {
-            type = arrayTy.cloneWith(extents);
-            continue;
-        }
-
-        if (const auto scalarTy = llvm::dyn_cast<ScalarType>(type)) {
-            type = ArrayType::get(scalarTy, extents);
-            continue;
-        }
-
-        return BroadcastResult::Failure;
-    }
-
-    return BroadcastResult::Success;
+    for (auto &type : types) type = *broadcast(type, ExtentRange(extents));
+    return BroadcastResult::Array;
 }
 
 //===----------------------------------------------------------------------===//

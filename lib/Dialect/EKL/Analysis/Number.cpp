@@ -246,10 +246,9 @@ FailureOr<Number> mlir::ekl::Number::parseField(AsmParser &parser)
         window,
         APFloat::roundingMode::NearestTiesToEven);
     auto error = maybeFloat.takeError();
-    if (!error) {
-        if (maybeFloat.get() == APFloat::opStatus::opOK)
-            return Number(value.convertToDouble());
-    } else
+    if (!error)
+        return Number(value.convertToDouble());
+    else
         consumeError(std::move(error));
 
     // Parse a binary rational literal.

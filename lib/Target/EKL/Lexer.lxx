@@ -64,7 +64,10 @@ string                      \"(\\.|[^\\"\n])*\"
 
 "type"                      { return ParserImpl::make_KW_TYPE(location()); }
 "const"                     { return ParserImpl::make_KW_CONST(location()); }
-"global"                    { return ParserImpl::make_KW_GLOBAL(location()); }
+"static"                    { return ParserImpl::make_KW_STATIC(location()); }
+"local"                     { return ParserImpl::make_KW_LOCAL(location()); }
+"import"                    { return ParserImpl::make_KW_IMPORT(location()); }
+"export"                    { return ParserImpl::make_KW_EXPORT(location()); }
 "kernel"                    { return ParserImpl::make_KW_KERNEL(location()); }
 "let"                       { return ParserImpl::make_KW_LET(location()); }
 "in"                        { return ParserImpl::make_KW_IN(location()); }

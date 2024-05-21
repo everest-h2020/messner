@@ -171,56 +171,6 @@ struct ScalarType : Type {
     {}
 };
 
-/// Implements the NumericType named constraint.
-struct NumericType : ScalarType {
-    using ScalarType::ScalarType;
-
-    /// @copydoc classof(Type)
-    [[nodiscard]] static bool classof(NumberType);
-    /// @copydoc classof(Type)
-    [[nodiscard]] static bool classof(IntegerType) { return true; }
-    /// @copydoc classof(Type)
-    [[nodiscard]] static bool classof(FloatType) { return true; }
-    /// @copydoc classof(Type)
-    [[nodiscard]] static bool classof(ekl::IndexType);
-    /// Determines whether @p type is a NumericType.
-    ///
-    /// @pre    `type`
-    [[nodiscard]] static bool classof(Type type);
-
-    /*implicit*/ NumericType(NumberType);
-    /*implicit*/ NumericType(IntegerType type)
-            : ScalarType(static_cast<Type>(type).getImpl())
-    {}
-    /*implicit*/ NumericType(FloatType type)
-            : ScalarType(static_cast<Type>(type).getImpl())
-    {}
-    /*implicit*/ NumericType(ekl::IndexType);
-};
-
-/// Implements the TensorType named constraint.
-struct TensorType : Type {
-    using Type::Type;
-
-    /// @copydoc classof(Type)
-    [[nodiscard]] static bool classof(NumericType) { return true; }
-    /// @copydoc classof(Type)
-    [[nodiscard]] static bool classof(ArrayType);
-    /// Determines whether @p type is a TensorType.
-    ///
-    /// @pre    `type`
-    [[nodiscard]] static bool classof(Type type);
-
-    /*implicit*/ TensorType(NumericType type)
-            : Type(static_cast<Type>(type).getImpl())
-    {}
-
-    /// Gets the underlying ScalarType.
-    [[nodiscard]] NumericType getScalarType() const;
-    /// Gets the extents.
-    [[nodiscard]] ExtentRange getExtents() const;
-};
-
 /// Implements the LiteralType named constraint.
 struct LiteralType : Type {
     using Type::Type;
@@ -244,7 +194,7 @@ struct LiteralType : Type {
     /// @pre    `type`
     [[nodiscard]] static bool classof(Type type);
 
-    /*implicit*/ LiteralType(ScalarType type)
+    /*implicit*/ LiteralType(std::convertible_to<ScalarType> auto type)
             : Type(static_cast<Type>(type).getImpl())
     {}
     /*implicit*/ LiteralType(StringType);
@@ -253,6 +203,120 @@ struct LiteralType : Type {
     /*implicit*/ LiteralType(ExtentType);
     /*implicit*/ LiteralType(EllipsisType);
     /*implicit*/ LiteralType(ErrorType);
+};
+
+/// Implements the BroadcastType named constraint.
+struct BroadcastType : Type {
+    using Type::Type;
+
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(ScalarType) { return true; }
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(ArrayType);
+    /// Determines whether @p type is a BroadcastType.
+    ///
+    /// @pre    `type`
+    [[nodiscard]] static bool classof(Type type);
+
+    /*implicit*/ BroadcastType(std::convertible_to<ScalarType> auto type)
+            : Type(static_cast<Type>(type).getImpl())
+    {}
+    /*implicit*/ BroadcastType(ArrayType type);
+
+    /// Gets the underlying ScalarType.
+    [[nodiscard]] ScalarType getScalarType() const;
+    /// Gets the underlying extents, which may be empty for scalars.
+    [[nodiscard]] ExtentRange getExtents() const;
+
+    /// Obtains a BroadcastType with the same extents and @p scalarTy .
+    [[nodiscard]] BroadcastType cloneWith(ScalarType scalarTy) const;
+    /// Obtains a BroadcastType with the same scalar type and @p extents .
+    [[nodiscard]] BroadcastType cloneWith(ExtentRange extents) const;
+};
+
+/// Implements the LogicType named constraint.
+struct LogicType : BroadcastType {
+    using BroadcastType::BroadcastType;
+
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(BoolType) { return true; }
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(ArrayType);
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(BroadcastType type)
+    {
+        return llvm::isa<BoolType>(type.getScalarType());
+    }
+    /// Determines whether @p type is a LogicType.
+    ///
+    /// @pre    `type`
+    [[nodiscard]] static bool classof(Type type);
+
+    /*implicit*/ LogicType(BoolType type) : BroadcastType(type) {}
+
+    /// Gets the underlying ScalarType.
+    [[nodiscard]] BoolType getScalarType() const
+    {
+        return llvm::cast<BoolType>(BroadcastType::getScalarType());
+    }
+};
+
+/// Implements the NumericType named constraint.
+struct NumericType : ScalarType {
+    using ScalarType::ScalarType;
+
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(NumberType);
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(IntegerType) { return true; }
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(FloatType) { return true; }
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(ekl::IndexType);
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(BoolType) { return false; }
+    /// Determines whether @p type is a NumericType.
+    ///
+    /// @pre    `type`
+    [[nodiscard]] static bool classof(Type type);
+
+    /*implicit*/ NumericType(NumberType);
+    /*implicit*/ NumericType(IntegerType type)
+            : ScalarType(static_cast<Type>(type).getImpl())
+    {}
+    /*implicit*/ NumericType(FloatType type)
+            : ScalarType(static_cast<Type>(type).getImpl())
+    {}
+    /*implicit*/ NumericType(ekl::IndexType);
+};
+
+/// Implements the ArithmeticType named constraint.
+struct ArithmeticType : BroadcastType {
+    using BroadcastType::BroadcastType;
+
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(NumericType) { return true; }
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(ArrayType);
+    /// @copydoc classof(Type)
+    [[nodiscard]] static bool classof(BroadcastType type)
+    {
+        return llvm::isa<NumericType>(type.getScalarType());
+    }
+    /// Determines whether @p type is a ArithmeticType.
+    ///
+    /// @pre    `type`
+    [[nodiscard]] static bool classof(Type type);
+
+    /*implicit*/ ArithmeticType(std::convertible_to<NumericType> auto type)
+            : BroadcastType(type)
+    {}
+
+    /// Gets the underlying ScalarType.
+    [[nodiscard]] NumericType getScalarType() const
+    {
+        return llvm::cast<NumericType>(BroadcastType::getScalarType());
+    }
 };
 
 //===----------------------------------------------------------------------===//
@@ -308,7 +372,7 @@ struct ABIType : Type {
     /// @pre    `type`
     [[nodiscard]] static bool classof(Type type);
 
-    /*implicit*/ ABIType(ABIScalarType type)
+    /*implicit*/ ABIType(std::convertible_to<ABIScalarType> auto type)
             : Type(static_cast<Type>(type).getImpl())
     {}
     /*implicit*/ ABIType(ABIReferenceType type);
@@ -409,6 +473,69 @@ inline LiteralType::LiteralType(ErrorType type)
 {}
 
 //===----------------------------------------------------------------------===//
+// BroadcastType implementation
+//===----------------------------------------------------------------------===//
+
+inline bool BroadcastType::classof(ArrayType) { return true; }
+
+inline bool BroadcastType::classof(Type type)
+{
+    return llvm::TypeSwitch<Type, bool>(type)
+        .Case([](ScalarType) { return true; })
+        .Case([](ArrayType) { return true; })
+        .Default(false);
+}
+
+inline BroadcastType::BroadcastType(ArrayType type)
+        : Type(static_cast<Type>(type).getImpl())
+{}
+
+inline ScalarType BroadcastType::getScalarType() const
+{
+    if (const auto arrayTy = llvm::dyn_cast<ArrayType>(*this))
+        return arrayTy.getScalarType();
+    return llvm::cast<ScalarType>(*this);
+}
+
+inline ExtentRange BroadcastType::getExtents() const
+{
+    if (const auto arrayTy = llvm::dyn_cast<ArrayType>(*this))
+        return arrayTy.getExtents();
+    return {};
+}
+
+inline BroadcastType BroadcastType::cloneWith(ScalarType scalarTy) const
+{
+    if (const auto arrayTy = llvm::dyn_cast<ArrayType>(*this))
+        return arrayTy.cloneWith(scalarTy);
+    return scalarTy;
+}
+
+inline BroadcastType BroadcastType::cloneWith(ExtentRange extents) const
+{
+    if (const auto arrayTy = llvm::dyn_cast<ArrayType>(*this))
+        return arrayTy.cloneWith(extents);
+    if (extents.empty()) return *this;
+    return ArrayType::get(llvm::cast<ScalarType>(*this), extents);
+}
+
+//===----------------------------------------------------------------------===//
+// LogicType implementation
+//===----------------------------------------------------------------------===//
+
+inline bool LogicType::classof(ArrayType type)
+{
+    return llvm::isa<BoolType>(type.getScalarType());
+}
+
+inline bool LogicType::classof(Type type)
+{
+    return llvm::TypeSwitch<Type, bool>(type)
+        .Case([](BroadcastType type) { return classof(type); })
+        .Default(false);
+}
+
+//===----------------------------------------------------------------------===//
 // NumericType implementation
 //===----------------------------------------------------------------------===//
 
@@ -435,35 +562,19 @@ inline NumericType::NumericType(ekl::IndexType type)
 {}
 
 //===----------------------------------------------------------------------===//
-// TensorType implementation
+// ArithmeticType implementation
 //===----------------------------------------------------------------------===//
 
-inline bool TensorType::classof(ArrayType type)
+inline bool ArithmeticType::classof(ArrayType type)
 {
     return llvm::isa<NumericType>(type.getScalarType());
 }
 
-inline bool TensorType::classof(Type type)
+inline bool ArithmeticType::classof(Type type)
 {
     return llvm::TypeSwitch<Type, bool>(type)
-        .Case([](NumericType) { return true; })
-        .Case([](ArrayType arrayTy) { return classof(arrayTy); })
+        .Case([](BroadcastType type) { return classof(type); })
         .Default(false);
-}
-
-inline NumericType TensorType::getScalarType() const
-{
-    if (const auto numericTy = llvm::dyn_cast<NumericType>(*this))
-        return numericTy;
-    return llvm::cast<NumericType>(
-        llvm::cast<ArrayType>(*this).getScalarType());
-}
-
-inline ExtentRange TensorType::getExtents() const
-{
-    if (const auto arrayTy = llvm::dyn_cast<ArrayType>(*this))
-        return arrayTy.getExtents();
-    return {};
 }
 
 //===----------------------------------------------------------------------===//

@@ -5,6 +5,7 @@
 
 #include "ParseDriver.h"
 
+#include "messner/Dialect/EKL/Transforms/TypeCheck.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -53,7 +54,7 @@ ParseDriver::ParseDriver(
 
     // Create the ProgramOp root and enter it.
     m_result = m_builder.create<ProgramOp>(loc);
-    m_builder.setInsertionPointToStart(&m_result->getBody().front());
+    m_builder.setInsertionPointToStart(m_result->getBody());
 
     // Open the file-level scope and add the builtins.
     m_scopes.push(llvm::SMLoc::getFromPointer(m_source.data()));
@@ -64,6 +65,7 @@ ParseDriver::ParseDriver(
         dialect->getCanonicalizationPatterns(constexprPatterns);
     for (auto &op : getContext()->getRegisteredOperations())
         op.getCanonicalizationPatterns(constexprPatterns, getContext());
+    populateHomogenizePatterns(constexprPatterns);
     populateLowerPatterns(constexprPatterns);
     m_constexprPatterns =
         std::make_unique<FrozenRewritePatternSet>(std::move(constexprPatterns));
@@ -217,6 +219,10 @@ ParseDriver::parseRational(Token token, Number &value)
 {
     auto [loc, text] = token;
 
+    // Consume the sign.
+    text.consume_front("+");
+    auto negate = text.consume_front("-");
+
     // Parse the binary rational literal.
     Number::mantissa_t mantissa;
     Number::exponent_t exponent = 0UL;
@@ -225,8 +231,9 @@ ParseDriver::parseRational(Token token, Number &value)
             || (text.consume_front_insensitive("p")
                 && !text.consumeInteger(10, exponent) && text.empty()))) {
         // Ensure that the sign is preserved correctly.
-        if (!token.second.starts_with("-") && mantissa.isNegative())
+        if (mantissa.isNegative())
             mantissa = mantissa.zext(mantissa.getBitWidth() + 1U);
+        if (negate) mantissa.negate();
 
         value = Number(std::move(mantissa), exponent);
         return success();
@@ -288,6 +295,10 @@ FailureOr<Type> ParseDriver::resolveType(ImportLocation nameLoc, StringRef name)
     if (failed(sym)) return failure();
     if (!*sym) return getErrorType();
     if (const auto result = (*sym)->dyn_cast<Type>()) return result;
+    if (const auto attr = (*sym)->dyn_cast<LiteralAttr>()) {
+        if (const auto indexAttr = llvm::dyn_cast<ekl::IndexAttr>(attr))
+            return ekl::IndexType::get(getContext(), indexAttr.getValue());
+    }
 
     // Definition has the wrong kind.
     auto diag = emitError(getLocation(nameLoc, name))
@@ -328,9 +339,9 @@ ParseDriver::resolveExpr(ImportLocation nameLoc, StringRef name)
         return expr<LiteralOp>(nameLoc, result);
     }
     if (const auto result = (*sym)->dyn_cast<SymbolOpInterface>()) {
-        if (const auto global = llvm::dyn_cast<GlobalOp>(result)) {
+        if (const auto staticOp = llvm::dyn_cast<StaticOp>(result)) {
             // Materialize the global reference here.
-            return expr<GetGlobalOp>(nameLoc, global);
+            return expr<GetStaticOp>(nameLoc, staticOp);
         }
     }
 
@@ -343,11 +354,12 @@ ParseDriver::resolveExpr(ImportLocation nameLoc, StringRef name)
     return expr<LiteralOp>(nameLoc, getErrorLiteral());
 }
 
-LogicalResult ParseDriver::global(
+LogicalResult ParseDriver::declareStatic(
     ImportLocation nameLoc,
+    AccessModifier access,
     StringRef name,
     TypeExpr type,
-    InitializerAttr init)
+    ekl::ArrayAttr init)
 {
     type = ensure(type);
 
@@ -363,17 +375,12 @@ LogicalResult ParseDriver::global(
             ReferenceType::get(ArrayType::get(getIntegerType(8U, false))));
     }
 
-    auto globalOp = m_builder.create<GlobalOp>(
-        loc,
-        name,
-        refTy,
-        init,
-        SymbolTable::Visibility::Private);
+    auto staticOp = m_builder.create<StaticOp>(loc, name, refTy, access, init);
 
     // Define the global symbol.
     return define(
         Shadow::None,
-        llvm::cast<SymbolOpInterface>(globalOp.getOperation()));
+        llvm::cast<SymbolOpInterface>(staticOp.getOperation()));
 }
 
 LogicalResult ParseDriver::beginKernel(ImportLocation nameLoc, StringRef name)
@@ -381,7 +388,10 @@ LogicalResult ParseDriver::beginKernel(ImportLocation nameLoc, StringRef name)
     // Create a KernelOp and enter it.
     const auto loc = getLocation(nameLoc, name);
     auto kernelOp  = m_builder.create<KernelOp>(loc, loc.getName());
-    m_builder.setInsertionPointToStart(&kernelOp.getBody().front());
+    m_builder.setInsertionPointToStart(kernelOp.getBody());
+    LLVM_DEBUG(
+        llvm::dbgs()
+        << "[Parser] begin " << KernelOp::getOperationName() << "\n");
 
     // Define the kernel symbol.
     return define(
@@ -395,44 +405,37 @@ void ParseDriver::beginIf(ImportLocation introLoc, Expr cond, bool withResult)
 
     // Create the IfOp and enter its then block.
     const auto loc = getLocation(introLoc);
-    auto ifOp      = withResult ? m_builder.create<IfOp>(loc, cond, nullptr)
+    auto ifOp      = withResult ? m_builder.create<IfOp>(loc, cond, Type{})
                                 : m_builder.create<IfOp>(loc, cond);
-    m_builder.setInsertionPointToStart(&ifOp.getThenBranch().front());
+    m_builder.setInsertionPointToStart(ifOp.getThenBranch());
+    LLVM_DEBUG(
+        llvm::dbgs() << "[Parser] begin " << IfOp::getOperationName() << "\n");
 }
 
 void ParseDriver::beginElse()
 {
     // Create the else branch block and enter it.
     auto ifOp = llvm::cast<IfOp>(getOp());
-    m_builder.setInsertionPointToStart(&ifOp.getElseBranch().emplaceBlock());
+    m_builder.setInsertionPointToStart(ifOp.getElseBranch());
 }
 
 void ParseDriver::beginAssoc(ImportLocation introLoc)
 {
     // Create the AssocOp and enter its map body.
     auto assocOp = m_builder.create<AssocOp>(getLocation(introLoc));
-    m_builder.setInsertionPointToStart(&assocOp.getMap().front());
+    m_builder.setInsertionPointToStart(assocOp.getMap());
+    LLVM_DEBUG(
+        llvm::dbgs()
+        << "[Parser] begin " << AssocOp::getOperationName() << "\n");
 }
 
 void ParseDriver::beginZip(ImportLocation introLoc, ArrayRef<Expr> exprs)
 {
     // Create the ZipOp and enter its combinator body.
     auto zipOp = create<ZipOp>(introLoc, exprs);
-    m_builder.setInsertionPointToStart(&zipOp.getCombinator().front());
-}
-
-void ParseDriver::beginReduce(
-    ImportLocation introLoc,
-    ImportLocation reductionLoc,
-    OperationName reductionOp)
-{
-    // Create the ReduceOp, which will populate its reduction block, then enter
-    // its map body.
-    auto reduceOp = m_builder.create<ReduceOp>(
-        getLocation(introLoc),
-        getLocation(reductionLoc),
-        reductionOp);
-    m_builder.setInsertionPointToStart(&reduceOp.getMap().front());
+    m_builder.setInsertionPointToStart(zipOp.getCombinator());
+    LLVM_DEBUG(
+        llvm::dbgs() << "[Parser] begin " << ZipOp::getOperationName() << "\n");
 }
 
 LogicalResult ParseDriver::write(
@@ -460,7 +463,7 @@ FailureOr<Expression> ParseDriver::call(
         return yieldAndEnd<ZipOp>(
             {expr<CoerceOp>(
                  input,
-                 getOp<ZipOp>().getCombinator().getArgument(0),
+                 getOp<ZipOp>().getCombinator()->getArgument(0),
                  output),
              input.getLoc()});
     };
@@ -476,19 +479,27 @@ FailureOr<Expression> ParseDriver::call(
         return recoverFromError();
     }
 
+    if (name == "log") {
+        // TODO: Implement.
+        return arguments[0].getValue();
+    } else if (name == "sum") {
+        // TODO: Implement.
+        return arguments[0].getValue();
+    }
+
     if (failed(recoverFromError(nameLoc, "unknown function"))) return failure();
     return expr<LiteralOp>(nameLoc, getErrorLiteral());
 }
 
-void ParseDriver::pushConstexpr(ImportLocation introLoc)
+void ParseDriver::beginConstexpr(ImportLocation introLoc)
 {
     // Start a constexpr scope by beginning an AssocOp.
     auto cexprOp = create<ConstexprOp>(introLoc);
-    m_builder.setInsertionPointToStart(&cexprOp.getExpression().front());
+    m_builder.setInsertionPointToStart(cexprOp.getBody());
     pushScope(introLoc);
 }
 
-FailureOr<LiteralAttr> ParseDriver::popConstexpr(Expr expr)
+FailureOr<LiteralAttr> ParseDriver::evalConstexpr(Expr expr)
 {
     // Finish the constexpr scope by closing the AssocOp.
     popScope();
@@ -510,7 +521,7 @@ FailureOr<LiteralAttr> ParseDriver::popConstexpr(Expr expr)
 
         // Apply all of our known constant evaluation patterns.
         if (failed(applyPatternsAndFoldGreedily(
-                cexprOp.getExpression(),
+                cexprOp.getBodyRegion(),
                 *m_constexprPatterns)))
             return failure();
 
@@ -619,6 +630,14 @@ FailureOr<ArrayType> ParseDriver::arrayType(TypeExpr scalar, Extents extents)
     }
 
     return ArrayType::get(scalarTy, extents.getValue());
+}
+
+Operation *ParseDriver::endImpl()
+{
+    const auto result = getOp();
+    LLVM_DEBUG(llvm::dbgs() << "[Parser] ending " << result->getName() << "\n");
+    m_builder.setInsertionPointAfter(result);
+    return result;
 }
 
 LogicalResult ParseDriver::define(Shadow shadow, Definition def)

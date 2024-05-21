@@ -26,3 +26,16 @@ LogicalResult mlir::ekl::impl::verifyTypeCheckOpInterface(Operation *op)
     LocalTypeChecker typeChecker(iface);
     return iface.typeCheck(typeChecker);
 }
+
+bool mlir::ekl::impl::isFullyTyped(Operation *op)
+{
+    const auto isUnbounded  = [](Type type) { return !getTypeBound(type); };
+    const auto hasUnbounded = [&](TypeRange types) {
+        return llvm::any_of(types, isUnbounded);
+    };
+
+    if (hasUnbounded(op->getOperandTypes())) return false;
+    if (hasUnbounded(op->getResultTypes())) return false;
+
+    return true;
+}

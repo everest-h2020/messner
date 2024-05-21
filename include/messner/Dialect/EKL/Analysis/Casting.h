@@ -104,11 +104,13 @@ inline FailureOr<ArrayType> broadcast(Type lhs, ExtentRange rhs)
 
 /// Distinguishes between possible outcomes of broadcasting.
 enum class BroadcastResult {
-    // The inputs are not broadcast comaptible.
+    /// The inputs are not broadcast comaptible.
     Failure,
-    // The extents were broadcast together.
-    Success,
-    // Some input is unbounded.
+    /// All inputs were scalars.
+    Scalar,
+    /// Inputs can be broadcasted to array types.
+    Array,
+    /// Some input is unbounded.
     Unbounded
 };
 
@@ -123,7 +125,8 @@ enum class BroadcastResult {
 ///
 /// @retval Failure     @p types can't be broadcast together.
 /// @retval Unbounded   @p types contained the unbounded type.
-/// @retval Success     @p extents contains the broadcasted extents.
+/// @retval Scalar      @p types are scalar and @p extents is empty.
+/// @retval Array       @p extents contains the broadcasted extents.
 [[nodiscard]] BroadcastResult
 broadcast(ArrayRef<Type> types, SmallVectorImpl<extent_t> &extents);
 
@@ -197,13 +200,18 @@ inline LogicalResult broadcast(ArrayType &lhs, Type &rhs)
 ///
 /// @return Whether broadcasting succeeded.
 ///
-/// @post   `failed(result) || !lhs || !rhs || llvm::isa<ArrayType>(lhs)`
-/// @post   `failed(result) || !lhs || !rhs || llvm::isa<ArrayType>(rhs)`
+/// @post   `failed(result) || !lhs || !rhs || llvm::isa<BroadcastType>(lhs)`
+/// @post   `failed(result) || !lhs || !rhs || llvm::isa<BroadcastType>(rhs)`
 inline LogicalResult broadcast(Type &lhs, Type &rhs)
 {
-    auto arrayTy = broadcast(lhs);
-    if (failed(arrayTy) || failed(broadcast(*arrayTy, rhs))) return failure();
-    lhs = *arrayTy;
+    if (auto arrayTy = llvm::dyn_cast<ArrayType>(lhs)) {
+        if (failed(broadcast(arrayTy, rhs))) return failure();
+        lhs = arrayTy;
+    } else if (auto arrayTy = llvm::dyn_cast<ArrayType>(rhs)) {
+        if (failed(broadcast(arrayTy, lhs))) return failure();
+        rhs = arrayTy;
+    } else if (!llvm::isa<ScalarType>(lhs) || !llvm::isa<ScalarType>(rhs))
+        return failure();
     return success();
 }
 

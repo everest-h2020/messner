@@ -90,13 +90,29 @@ def EKL_IndexAttr : EKL_Attr<"Index"> {
 
 def EKL_ArrayAttr : EKL_Attr<"Array", [TypedAttrInterface]> {
     let mnemonic = "array";
-    let summary = "Comptime EKL array value";
+    let summary = "Array literal value attribute";
     let description = [{
         The `ekl.array` attribute holds a value of an ArrayType.
+
+        The internal representation of this attribute uses an array of stack
+        expression literals, which are also implicitly broadcasting and
+        covariant. In addition, a splat representation is possible, where a
+        single-valued array can be stored in a shallow form.
 
         Examples:
 
         ```
+        // A scalar-valued array attribute.
+        #a1 = #ekl.array<[1 : si32]> : !ekl.array<si32>
+
+        // A covariant splat array attribute.
+        #a2 = #ekl.array<[0 : si32]> : !ekl.array<si64[3, 1024]>
+
+        // A stacked array attribute with splat elements.
+        #a3 = #ekl.array<[1 : si32, 2 : si32, 3 : si32]> : !ekl.array<si64[3, 1]>
+
+        // A stacked array attribute with broadcasted elements.
+        #a4 = #ekl.array<[#a1, #a2, #a3]> : !ekl.array<si64[3, 3, 1024]>
         ```
     }];
 
@@ -127,24 +143,24 @@ def EKL_ArrayAttr : EKL_Attr<"Array", [TypedAttrInterface]> {
                 mlir::ArrayAttr::get(arrayType.getContext(), {splatValue}));
         }]>,
         AttrBuilderWithInferredContext<(ins
-                "extent_t":$extent,
-                "ScalarAttr":$splatValue), [{
+                "ScalarAttr":$splatValue,
+                CArg<"ExtentRange", "{}">:$extents), [{
             return $_get(
                 splatValue.getContext(),
                 ArrayType::get(
                     splatValue.getContext(),
                     splatValue.getType(),
-                    {extent}),
+                    extents),
                 mlir::ArrayAttr::get(splatValue.getContext(), {splatValue}));
         }]>,
         AttrBuilderWithInferredContext<(ins
-                "extent_t":$extent,
-                "ArrayAttr":$splatValue), [{
+                "ArrayAttr":$bcastValue,
+                "extent_t":$extent), [{
             return $_get(
-                splatValue.getContext(),
-                splatValue.getType().cloneWith(
-                    concat({extent}, splatValue.getType().getExtents())),
-                mlir::ArrayAttr::get(splatValue.getContext(), {splatValue}));
+                bcastValue.getContext(),
+                bcastValue.getType().cloneWith(
+                    concat({extent}, bcastValue.getType().getExtents())),
+                mlir::ArrayAttr::get(bcastValue.getContext(), {bcastValue}));
         }]>];
     let skipDefaultBuilders = 1;
 
@@ -179,61 +195,21 @@ def EKL_ArrayAttr : EKL_Attr<"Array", [TypedAttrInterface]> {
         /// @pre    `getType().isInBounds(indices)`
         [[nodiscard]] Attribute subscript(ExtentRange indices) const;
 
+        /// Broadcasts this array to the @p extents .
+        ///
+        /// @pre    `getType().isBroadcastableTo(extents)`
+        [[nodiscard]] ArrayAttr broadcastTo(ExtentRange extents) const
+        {
+            assert(getType().isBroadcastableTo(extents));
+
+            return get(getType().cloneWith(extents), getStack());
+        }
+
         //===--------------------------------------------------------------===//
         // TypedAttrInterface
         //===--------------------------------------------------------------===//
 
         [[nodiscard]] ArrayType getType() const { return getArrayType(); }
-    }];
-}
-
-def EKL_InitializerAttr : EKL_Attr<"Initializer"> {
-    let mnemonic = "init";
-    let summary = "Initializer literal value attribute";
-    let description = [{
-        The `ekl.init` attribute holds the value of an initializable ABI array
-        constant.
-
-        Since the backing storage for the array elements is a DenseArrayAttr,
-        the only allowed scalar types are the following:
-
-            - Booleans
-            - Integers up to 64 bits wide
-            - Floating-point subtypes of f64
-
-        Examples:
-
-        ```
-        #ekl.init<array<si32: 0>>
-        #ekl.init<array<si32: 0, -1, 2, 3>, [2, 2]>
-        ```
-    }];
-
-    let parameters = (ins
-        "DenseArrayAttr":$flattened,
-        OptionalArrayRefParameter<"extent_t">:$extents);
-
-    let builders = [
-        AttrBuilderWithInferredContext<(ins
-                "DenseArrayAttr":$flattened,
-                CArg<"ExtentRange", "{}">:$extents), [{
-            assert(flattened);
-            return $_get(flattened.getContext(), flattened, extents);
-        }]>];
-
-    let assemblyFormat = [{
-        `<` $flattened ( `,` custom<Extents>($extents)^ )? `>`
-    }];
-    let genVerifyDecl = 1;
-
-    code extraClassDeclaration = [{
-        /// Gets the matching ArrayType for the contained value.
-        [[nodiscard]] ArrayType getType() const
-        {
-            return ArrayType::get(
-                getFlattened().getElementType(),
-                getExtents());
-        }
     }];
 }
 
@@ -514,7 +490,6 @@ def EKL_LiteralAttr : Attr<
 
             - ScalarAttr
             - ArrayAttr
-            - InitializerAttr
             - IdentityAttr
             - ExtentAttr
             - EllipsisAttr

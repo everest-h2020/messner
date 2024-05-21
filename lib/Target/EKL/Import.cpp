@@ -4,6 +4,7 @@
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
 
 #include "messner/Target/EKL/Import.h"
+#include "messner/Dialect/EKL/Transforms/TypeCheck.h"
 
 #include "Lexer.hpp"
 #include "ParseDriver.h"

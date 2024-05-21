@@ -42,7 +42,10 @@ class LexerImpl;
 
 %token                      KW_TYPE     "type"
 %token                      KW_CONST    "const"
-%token                      KW_GLOBAL   "global"
+%token                      KW_STATIC   "static"
+%token                      KW_LOCAL    "local"
+%token                      KW_IMPORT   "import"
+%token                      KW_EXPORT   "export"
 %token                      KW_KERNEL   "kernel"
 %token                      KW_LET      "let"
 %token                      KW_IN       "in"
@@ -73,6 +76,8 @@ class LexerImpl;
 %token<StringRef>           ID
 
 /*--- NON-TERMINALS ----------------------------------------------------------*/
+
+%type<AccessModifier>       access-spec
 
 %type<LiteralAttr>          literal
 
@@ -108,7 +113,7 @@ class LexerImpl;
 %type<ConstExpr>            const-expr
 %type<ConstExprList>        const-expr-list-0
 %type<ConstExprList>        const-expr-list-1
-%type<InitializerAttr>      init-spec
+%type<ekl::ArrayAttr>       init-spec
 
 %%
 
@@ -123,7 +128,7 @@ file                        : sym-def-list-0
 
 sym-def                     : type-def ';'
                             | const-def ';'
-                            | global-def ';'
+                            | static-def ';'
                             | kernel-def
                             | error ';'
 {
@@ -145,11 +150,17 @@ const-def                   : "const" ID[name] '=' const-expr[value]
                               { driver.defineConst(@name, $name, $value); }
                             ;
 
-global-def                  : "global" ID[name] type-spec[type] init-spec[init]
+static-def                  : "static" access-spec[access] ID[name] type-spec[type] init-spec[init]
 {
-    // Create a new GlobalOp.
-    if (failed(driver.global(@name, $name, $type, $init))) YYABORT;
+    // Create a new StaticOp.
+    if (failed(driver.declareStatic(@name, $access, $name, $type, $init))) YYABORT;
 }
+                            ;
+
+access-spec                 : %empty { $$ = AccessModifier::Local; }
+                            | "local" { $$ = AccessModifier::Local; }
+                            | "import" { $$ = AccessModifier::Import; }
+                            | "export" { $$ = AccessModifier::Export; }
                             ;
 
 kernel-def                  : "kernel" ID[name] '('
@@ -334,7 +345,7 @@ expr-1                      : expr-2
                             | expr-2[condition] '?'
                               expr-2[trueValue]
                               ':' expr-2[falseValue]
-                              { $$ = {driver.expr<ChoiceOp>(@2, $condition, $trueValue, $falseValue), @$}; }
+                              { $$ = {driver.expr<ChoiceOp>(@2, $condition, ValueRange{$falseValue, $trueValue}), @$}; }
                             ;
 
 expr-2                      : expr-3
@@ -451,8 +462,8 @@ if-expr                     : "if" expr-0[condition] "then"
 
 reduce-expr                 : '<' reduce-op[op]
 {
-    // Begin a new ReduceOp.
-    driver.beginReduce(@1, @op, OperationName($op, driver.getContext()));
+    // Begin a new AssocOp.
+    driver.beginAssoc(@1);
     // Push a new variable scope onto the stack.
     driver.pushScope(@1);
 }
@@ -460,8 +471,14 @@ reduce-expr                 : '<' reduce-op[op]
 {
     // Pop the variable scope from the stack.
     driver.popScope();
+    // End the current AssopOp by yielding the value.
+    const auto result = driver.yieldAndEnd<AssocOp>($value);
+    // Make a reduction functor builder.
+    const auto builder = getFunctorBuilder(
+        OperationName($op, driver.getContext()),
+        driver.getLocation(@op));
     // End the current ReduceOp by yielding the value.
-    $$ = {driver.yieldAndEnd<ReduceOp>($value), @$};
+    $$ = {driver.expr<ReduceOp>(@$, result, builder), @$};
 }
                             ;
 
@@ -549,10 +566,10 @@ extent-spec                 : '[' const-expr-list-0[extents] ']'
 // scope creates an ephemereal container region at the current location, which
 // is deleted when the scope is popped.
 
-const-expr                  : { driver.pushConstexpr(@$); }
+const-expr                  : { driver.beginConstexpr(@$); }
                               expr
 {
-    const auto evaluated = driver.popConstexpr($expr);
+    const auto evaluated = driver.evalConstexpr($expr);
     if (failed(evaluated)) YYABORT;
     $$ = {*evaluated, @expr};
 }

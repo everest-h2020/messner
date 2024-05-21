@@ -8,6 +8,20 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
+namespace mlir::ekl {
+
+/// Distinguishes access restrictions on static variables.
+enum class AccessModifier {
+    // The variable is defined locally and not accessible externally.
+    Local,
+    // The variable is defined and accessible externally.
+    Import,
+    // The variable is defined locally, but accessible externally.
+    Export
+};
+
+} // namespace mlir::ekl
+
 //===- Generated includes -------------------------------------------------===//
 
 #include "messner/Dialect/EKL/Enums.h.inc"

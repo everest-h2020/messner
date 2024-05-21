@@ -111,11 +111,10 @@ struct [[nodiscard]] Contradiction : std::optional<InFlightDiagnostic> {
     /// @return Contradiction.
     Contradiction explain(ValueRange exprs) &&
     {
-        explainImpl([&](Diagnostic &diag) {
+        return std::move(*this).explainImpl([&](Diagnostic &diag) {
             for (auto expr : exprs)
                 diag.attachNote(expr.getLoc()) << "from this expression";
         });
-        return std::move(*this);
     }
 
     /// Obtains a LogicalResult that indicates whether an error is contained.
@@ -130,15 +129,18 @@ struct [[nodiscard]] Contradiction : std::optional<InFlightDiagnostic> {
     }
 
 private:
-    void explainImpl(auto fn)
+    friend struct TypeCheckingAdaptor;
+
+    Contradiction explainImpl(auto fn) &&
     {
         if (this->has_value() && failed(value()))
             fn(*(this->value().getUnderlyingDiagnostic()));
+        return std::move(*this);
     }
     Contradiction explainImpl(std::optional<Location> location, auto fn) &&
     {
-        explainImpl([&](Diagnostic &diag) { fn(diag.attachNote(location)); });
-        return std::move(*this);
+        return std::move(*this).explainImpl(
+            [&](Diagnostic &diag) { fn(diag.attachNote(location)); });
     }
 };
 
@@ -233,7 +235,7 @@ struct TypeCheckingAdaptor : AbstractTypeChecker {
         Type unified;
         if (auto contra = unify(types, unified)) return contra;
         return require(unified, result, what)
-            .explain([&](Diagnostic &diag) {
+            .explainImpl([&](Diagnostic &diag) {
                 diag << "after unifying to " << unified;
             })
             .explain(types);
@@ -279,7 +281,19 @@ struct TypeCheckingAdaptor : AbstractTypeChecker {
         return coerce(getType(expr), to).explain(expr);
     }
 
-    Contradiction broadcastAndUnify(ValueRange exprs, Type &result) const;
+    template<broadcast_type_constrait ResultType = BroadcastType>
+    Contradiction broadcastAndUnify(
+        ValueRange exprs,
+        ResultType &result,
+        const llvm::Twine &what = {}) const
+    {
+        // Broadcast the operands, which will result in a BroadcastType.
+        SmallVector<Type> broadcasted;
+        if (auto contra = broadcast(exprs, broadcasted)) return contra;
+
+        // Unify the broadcasted types to the desired BroadcastType subtype.
+        return unify(broadcasted, result, what).explain(exprs);
+    }
 
     InFlightDiagnostic emitError() const
     {
