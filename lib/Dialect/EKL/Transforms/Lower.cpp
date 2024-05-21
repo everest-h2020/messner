@@ -349,10 +349,16 @@ struct RewriteZipToAssoc : OpRewritePattern<ZipOp> {
 
         SmallVector<Value> newOperands(op.getOperands());
         for (auto &op : newOperands) {
-            op =
-                rewriter
-                    .create<BroadcastOp>(op.getLoc(), op, resultTy.getExtents())
-                    .getResult();
+            op = rewriter
+                     .create<BroadcastOp>(
+                         op.getLoc(),
+                         op,
+                         resultTy.getExtents(),
+                         llvm::cast<BroadcastType>(
+                             llvm::cast<ExpressionType>(op.getType())
+                                 .getTypeBound())
+                             .cloneWith(resultTy.getExtents()))
+                     .getResult();
         }
 
         rewriter.replaceOpWithNewOp<AssocOp>(
