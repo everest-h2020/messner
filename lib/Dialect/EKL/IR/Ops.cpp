@@ -915,6 +915,20 @@ OpFoldResult SubscriptOp::fold(SubscriptOp::FoldAdaptor adaptor)
     return array.subscript(indices);
 }
 
+Speculation::Speculatability SubscriptOp::getSpeculatability()
+{
+    const auto isSpeculatable = [](Type type) {
+        const auto bound = llvm::cast<ExpressionType>(type).getTypeBound();
+        if (const auto indexTy = llvm::dyn_cast<ekl::IndexType>(bound))
+            return !indexTy.isUnbounded();
+        return llvm::isa<ExtentType>(bound);
+    };
+
+    return llvm::all_of(getSubscripts().getTypes(), isSpeculatable)
+             ? Speculation::Speculatable
+             : Speculation::NotSpeculatable;
+}
+
 [[nodiscard]] static BlockArgument getInferrableIndex(Value value)
 {
     // Must be a block argument.
@@ -1547,6 +1561,165 @@ ExtentRange BroadcastOp::getExtents()
 //===----------------------------------------------------------------------===//
 // CoerceOp implementation
 //===----------------------------------------------------------------------===//
+
+[[nodiscard]] static ekl::IntegerAttr
+coerce(ScalarAttr input, ekl::IntegerType output)
+{
+    return llvm::TypeSwitch<ScalarAttr, ekl::IntegerAttr>(input)
+        .Case([&](NumberAttr attr) {
+            auto value = attr.getValue();
+            value.roundTowardsZero();
+            return ::coerce(
+                ekl::IntegerAttr::get(
+                    input.getContext(),
+                    llvm::APSInt(value.getMantissa(), true)),
+                output);
+        })
+        .Case([&](ekl::IntegerAttr attr) {
+            auto value    = attr.getValue();
+            auto adjValue = attr.getType().isSigned()
+                              ? value.sextOrTrunc(output.getWidth())
+                              : value.zextOrTrunc(output.getWidth());
+            return ekl::IntegerAttr::get(
+                input.getContext(),
+                llvm::APSInt(adjValue, output.isUnsigned()));
+        })
+        .Case([&](FloatAttr attr) {
+            llvm::APSInt result(output.getWidth(), output.isUnsigned());
+            bool isExact;
+            const auto status = attr.getValue().convertToInteger(
+                result,
+                llvm::APFloat::roundingMode::NearestTiesToEven,
+                &isExact);
+            (void)status;
+            // TODO: Check status.
+            return ekl::IntegerAttr::get(attr.getContext(), result);
+        })
+        .Case([&](ekl::IndexAttr attr) {
+            return ::coerce(
+                ekl::IntegerAttr::get(
+                    input.getContext(),
+                    llvm::APSInt(llvm::APInt(64U, attr.getValue()), true)),
+                output);
+        })
+        .Default(ekl::IntegerAttr{});
+}
+
+[[nodiscard]] static FloatAttr coerce(ScalarAttr input, FloatType output)
+{
+    return llvm::TypeSwitch<ScalarAttr, FloatAttr>(input)
+        .Case([&](NumberAttr attr) {
+            return FloatAttr::get(
+                output,
+                attr.getValue().toAPFloatWithRounding(
+                    const_cast<llvm::fltSemantics &>(
+                        output.getFloatSemantics())));
+        })
+        .Case([&](ekl::IntegerAttr attr) {
+            llvm::APFloat value(output.getFloatSemantics());
+            value.convertFromAPInt(
+                attr.getValue(),
+                attr.getType().isSigned(),
+                llvm::APFloat::roundingMode::NearestTiesToEven);
+            return FloatAttr::get(output, value);
+        })
+        .Case([&](FloatAttr attr) {
+            auto value = attr.getValue();
+            bool losesInfo;
+            value.convert(
+                output.getFloatSemantics(),
+                llvm::APFloat::roundingMode::NearestTiesToEven,
+                &losesInfo);
+            return FloatAttr::get(output, value);
+        })
+        .Case([&](ekl::IndexAttr attr) {
+            return FloatAttr::get(output, static_cast<double>(attr.getValue()));
+        })
+        .Default(FloatAttr{});
+}
+
+[[nodiscard]] static ekl::IndexAttr
+coerce(ScalarAttr input, ekl::IndexType output)
+{
+    return llvm::TypeSwitch<ScalarAttr, ekl::IndexAttr>(input)
+        .Case([&](NumberAttr attr) {
+            auto value = attr.getValue();
+            value.roundTowardsZero();
+            return ::coerce(
+                ekl::IntegerAttr::get(
+                    input.getContext(),
+                    llvm::APSInt(value.getMantissa(), true)),
+                output);
+        })
+        .Case([&](ekl::IntegerAttr attr) {
+            auto value = attr.getValue();
+            if (value.getActiveBits() > 64U) return ekl::IndexAttr{};
+            const auto intValue = value.getZExtValue();
+            if (intValue > output.getUpperBound()) return ekl::IndexAttr{};
+            return ekl::IndexAttr::get(input.getContext(), intValue);
+        })
+        .Case([&](FloatAttr attr) {
+            llvm::APSInt intValue(64U, true);
+            bool isExact;
+            const auto status = attr.getValue().convertToInteger(
+                intValue,
+                llvm::APFloat::roundingMode::NearestTiesToEven,
+                &isExact);
+            (void)status;
+            // TODO: Check status.
+            return ekl::IndexAttr::get(
+                input.getContext(),
+                intValue.getZExtValue());
+        })
+        .Case([&](ekl::IndexAttr attr) {
+            if (attr.getValue() > output.getUpperBound())
+                return ekl::IndexAttr{};
+            return attr;
+        })
+        .Default(ekl::IndexAttr{});
+}
+
+[[nodiscard]] static ScalarAttr coerce(ScalarAttr input, ScalarType output)
+{
+    return llvm::TypeSwitch<ScalarType, ScalarAttr>(output)
+        .Case([&](ekl::IntegerType type) { return ::coerce(input, type); })
+        .Case([&](FloatType type) { return ::coerce(input, type); })
+        .Case([&](ekl::IndexType type) { return ::coerce(input, type); })
+        .Default(ScalarAttr{});
+}
+
+[[nodiscard]] static ekl::ArrayAttr
+coerce(ekl::ArrayAttr input, ScalarType output)
+{
+    SmallVector<Attribute> stack(input.getStack().getValue());
+    for (auto &attr : stack)
+        if (const auto arrayAttr = llvm::dyn_cast<ekl::ArrayAttr>(attr))
+            attr = coerce(arrayAttr, output);
+        else if (const auto scalarAttr = llvm::dyn_cast<ScalarAttr>(attr))
+            attr = coerce(scalarAttr, output);
+        else
+            return {};
+
+    return ekl::ArrayAttr::get(input.getArrayType().cloneWith(output), stack);
+}
+
+OpFoldResult CoerceOp::fold(CoerceOp::FoldAdaptor adaptor)
+{
+    if (!isSpeculatable(*this) || !adaptor.getOperand()) return {};
+
+    if (const auto arrayTy =
+            llvm::dyn_cast<ekl::ArrayType>(getType().getTypeBound()))
+        return coerce(
+            llvm::cast<ekl::ArrayAttr>(adaptor.getOperand()),
+            arrayTy.getScalarType());
+    if (const auto scalarTy =
+            llvm::dyn_cast<ekl::ScalarType>(getType().getTypeBound()))
+        return coerce(
+            llvm::cast<ekl::ScalarAttr>(adaptor.getOperand()),
+            scalarTy);
+
+    return {};
+}
 
 LogicalResult CoerceOp::typeCheck(AbstractTypeChecker &typeChecker)
 {

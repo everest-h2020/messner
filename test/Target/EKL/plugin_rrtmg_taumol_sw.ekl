@@ -9,20 +9,20 @@ const N_g     = _7;
 const N_G     = _16;
 
 const N_T     = _14;
-const T_min   = 160;
-const T_max   = 355;
+const T_min   = 160 !> REAL;
+const T_max   = 355 !> REAL;
 //const alpha_T = (T_max - T_min) / (N_T - 1);
-const alpha_T = 15;
+const alpha_T = 15 !> REAL;
 
 const N_p     = _59;
-const p_surf  = 109663.32;
-const p_top   = 1.01;
-const p_tropo = 9948.43;
+const p_surf  = 109663.32 !> REAL;
+const p_top   = 1.01 !> REAL;
+const p_tropo = 9948.43 !> REAL;
 //const alpha_p = (log(p_surf) - log(p_top)) / (N_p - 1);
-const alpha_p = 0.19991758436281484;
+const alpha_p = 0.19991758436281484 !> REAL;
 
 const N_eta   = _9;
-const C_TINY  = 1p-51;
+const C_TINY  = 1p-51 !> REAL;
 
 const N_u     = _53;
 
@@ -60,9 +60,9 @@ const C_MINOR_LIM   = [
     [_19, _25], [_25, _30], [_30, _34], [_34, _42], [_42, _48],
     [_48, _53], [_53, _53], [_53, _53], [_53, _53]];
 
-const C_01          = [0, 1];
-const C_10          = [1, 0];
-const C_m11         = [-1, 1];
+const C_01          = [0 !> REAL, 1 !> REAL];
+const C_10          = [1 !> REAL, 0 !> REAL];
+const C_m11         = [-1 !> REAL, 1 !> REAL];
 
 static import C_ETA_HALF   : & REAL[_2, N_flav, N_T];
 static import C_K_MAJOR    : & REAL[N_b, N_T, N_eta, _60, N_G];
@@ -80,7 +80,7 @@ kernel pluin_rrtmg_taumol_sw(
     let T_prime     : REAL[N_x]     = (T - T_min) / alpha_T;
     let j_T         : index[N_x]    = index(T_prime);
     //let j_T         : index[N_x, 2] = [j_T, j_T + _1];
-    let f_T         : REAL[N_x]     = T_prime % 1;
+    let f_T         : REAL[N_x]     = T_prime % (1 !> REAL);
     //let f_T         : REAL[N_x, 2]  = [1 - f_T, f_T];
     let f_T                         = C_10[*] + C_m11[*] * f_T[:, *];
 
@@ -88,8 +88,8 @@ kernel pluin_rrtmg_taumol_sw(
     let i_layer     : index[N_x]    = p < p_tropo ? _1 : _0;
     let j_p         : index[N_x]    = index(p_prime) + i_layer;
     //let j_p         : index[N_x, 2] = [j_p, j_p + _1];
-    let f_p         : REAL[N_x]     = p_prime % 1;
-    //let f_p         : REAL[N_x, 2]  = [1 - f_p, f_p];
+    let f_p         : REAL[N_x]     = p_prime % (1 !> REAL);
+    //let f_p         : REAL[N_x, 2]  = [(1 !> REAL) - f_p, f_p];
     let f_p                         = C_10[*] + C_m11[*] * f_p[:, *];
 
 // -----
@@ -99,15 +99,15 @@ let i_maj       = C_FLAV_TO_ABS[i_flav];
 
 let r_maj[x, b, pair] = {
     let g : index = i_maj[x, b, pair];
-    if g > 0 then r_gas[g - _1, x] else 1
+    if g > _0 then r_gas[g - _1, x] else (1 !> REAL)
 };
 
 let eta_half[x, b, dT: _1] = (in C_ETA_HALF)[i_layer[x], i_flav[x, b], j_T[x] + dT];
 let r_mix       = r_maj[..., _0, *] + eta_half * r_maj[..., _1, *];
-let eta         = r_mix > C_TINY ? r_maj[..., _0, *] / r_mix : 0.5;
-let eta_prime   = eta * (N_eta - 1);
-let j_eta              = index(eta_prime);
-let f_eta       = eta_prime % 1;
+let eta         = r_mix > C_TINY ? r_maj[..., _0, *] / r_mix : (0.5 !> REAL);
+let eta_prime   = eta * (N_eta - _1);
+let j_eta       = index(eta_prime);
+let f_eta       = eta_prime % (1 !> REAL);
 let f_eta       = C_10[*, *, *] + C_01[*, *, *] * f_eta[..., *];
 
 // -----
@@ -119,21 +119,21 @@ let f_mix       = r_mix * n_d[:, *, *];
 // -----
 
 let tau_maj[b, x, G] = <+ dT, deta, dp<
-    (in C_K_MAJOR)[b, j_T[x] + dT, j_eta[x, b, dT] + deta, j_p[x] + dp]
+    (in C_K_MAJOR)[b, j_T[x] + dT, j_eta[x, b, dT] + deta, j_p[x] + dp, G]
     * f_major[x, b, dT, deta, dp]
     * f_mix[x, b, dT];
 
 // -----
 
-let u_layer[u,x] = i_layer[x] == C_MINOR_LAY[u] ? 1 : 0;
+let u_layer[u,x] = i_layer[x] == C_MINOR_LAY[u] ? (1 !> REAL) : (0 !> REAL);
 let n_minor     = r_gas[index(C_MINOR_ABS), :] * n_d[*, :];
-let rho         = 0.01 * p / T;
-let u_density   = C_MINOR_SCALE[:, *] ~= 0 ? rho[*, :] : 0;
+let rho         = (0.01 !> REAL) * p / T;
+let u_density   = C_MINOR_SCALE[:, *] ~= (0 !> REAL) ? rho[*, :] : (0 !> REAL);
 let u_dry       = 1 / (1 + r_gas[_0]);
 let u_scale[u, x] = {
     let i_g : index = C_MINOR_SCALE[u];
     if i_g > N_g then r_gas[i_g, x] else {
-        if i_g < N_g then 1 - r_gas[i_g, x] else 0
+        if i_g < N_g then (1 !> REAL) - r_gas[i_g, x] else (0 !> REAL)
     }
 };
 let f_u         = u_layer * u_density * u_scale;
@@ -146,7 +146,8 @@ let tau_min[b, x, G] = sum(u_tau[:, x, G], C_MINOR_LIM[b, _0], C_MINOR_LIM[b, _1
 
 // -----
 
-out tau_g = tau_maj + tau_min;
+// out tau_g = tau_maj + tau_min;
+out tau_g = tau_maj;
 
 // -----
 

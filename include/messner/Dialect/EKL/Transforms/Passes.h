@@ -44,6 +44,14 @@ void populateLowerPatterns(RewritePatternSet &patterns);
 /// Construct the ekl-lower pass.
 std::unique_ptr<Pass> createLowerPass();
 
+/// Adds the ekl-implement patterns to @p patterns .
+///
+/// @param  [in,out]    patterns    RewritePatternSet.
+void populateImplementPatterns(RewritePatternSet &patterns);
+
+/// Construct the ekl-implement pass.
+std::unique_ptr<Pass> createImplementPass();
+
 //===----------------------------------------------------------------------===//
 // Registration
 //===----------------------------------------------------------------------===//

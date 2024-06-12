@@ -648,7 +648,9 @@ def EKL_GetStaticOp : EKL_ExpressionBase<
     }];
 }
 
-def EKL_SubscriptOp : EKL_ExpressionBase<"subscript", [Pure]> {
+def EKL_SubscriptOp : EKL_ExpressionBase<
+        "subscript",
+        [DeclareOpInterfaceMethods<ConditionallySpeculatable>]> {
     let summary = "Subscript operator";
     let description = [{
         The `ekl.subscript` operator derives a value from an input array using
@@ -735,6 +737,8 @@ def EKL_SubscriptOp : EKL_ExpressionBase<"subscript", [Pure]> {
         attr-dict
         custom<Result>(type($result))
     }];
+
+    code extraClassDeclaration = [{}];
 }
 
 def EKL_StackOp : EKL_ExpressionBase<"stack", [Pure]> {
@@ -1278,8 +1282,7 @@ def EKL_CoerceOp : EKL_CastBase<"coerce"> {
         ```
     }];
 
-    // TODO: Implement folder.
-    let hasFolder = 0;
+    let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//

@@ -53,4 +53,13 @@ def Lower : Pass<"ekl-lower", "::mlir::ekl::KernelOp"> {
     let constructor = "::mlir::ekl::createLowerPass()";
 }
 
+def Implement : Pass<"ekl-implement", "::mlir::ekl::KernelOp"> {
+    let summary = "TODO";
+    let description = [{
+        TODO
+    }];
+
+    let constructor = "::mlir::ekl::createImplementPass()";
+}
+
 #endif
