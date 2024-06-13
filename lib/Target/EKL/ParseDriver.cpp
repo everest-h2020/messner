@@ -99,6 +99,8 @@ OwningOpRef<ProgramOp> ParseDriver::takeResult()
 
 Location ParseDriver::getLocation(ImportLocation loc) const
 {
+    if (!loc.begin.isValid() || !loc.end.isValid()) return getUnknownLoc();
+
     const auto [startLine, startColumn] = getSourceMgr().getLineAndColumn(
         loc.begin,
         getSourceMgr().getMainFileID());
@@ -156,7 +158,7 @@ void ParseDriver::emitError(ImportLocation where, const llvm::Twine &msg)
     emit<llvm::SourceMgr::DiagKind::DK_Error>(getSourceMgr(), where, msg);
 }
 
-LogicalResult ParseDriver::recoverFromError()
+LogicalResult ParseDriver::recover()
 {
     const auto limit = errorLimit.getValue();
     if (m_numErrors++ == limit) emitError("too many errors, aborting");
@@ -176,8 +178,7 @@ ParseDriver::parseIndex(Token token, extent_t &value)
         return success();
     }
 
-    if (failed(recoverFromError(loc, "index literal too large")))
-        return failure();
+    if (failed(recover(loc, "index literal too large"))) return failure();
     return std::nullopt;
 }
 
@@ -209,8 +210,7 @@ ParseDriver::parseDecimal(Token token, Number &value)
 
     // Who knows why this fails, we can't fix it.
     llvm::consumeError(std::move(error));
-    if (failed(recoverFromError(loc, "invalid float literal")))
-        return failure();
+    if (failed(recover(loc, "invalid float literal"))) return failure();
     return std::nullopt;
 }
 
@@ -240,36 +240,32 @@ ParseDriver::parseRational(Token token, Number &value)
     }
 
     // I guess the exponent is stupendously large?
-    if (failed(recoverFromError(loc, "invalid rational literal")))
-        return failure();
+    if (failed(recover(loc, "invalid rational literal"))) return failure();
     return std::nullopt;
 }
 
-void ParseDriver::defineType(ImportLocation nameLoc, StringRef name, Type type)
+void ParseDriver::typeDef(ImportLocation nameLoc, StringRef name, TypeExpr type)
 {
-    if (!type) type = getErrorType();
+    if (!type) type = {getErrorType(), nameLoc};
 
     const auto ok =
         define(Shadow::Inner, Definition(getLocation(nameLoc, name), type));
     assert(succeeded(ok));
 }
 
-void ParseDriver::defineConst(
+void ParseDriver::constDef(
     ImportLocation nameLoc,
     StringRef name,
-    LiteralAttr value)
+    ConstExpr value)
 {
-    if (!value) value = getErrorLiteral();
+    if (!value) value = {getErrorLiteral(), nameLoc};
 
     const auto ok =
         define(Shadow::Inner, Definition(getLocation(nameLoc, name), value));
     assert(succeeded(ok));
 }
 
-void ParseDriver::defineExpr(
-    ImportLocation nameLoc,
-    StringRef name,
-    Expression value)
+void ParseDriver::exprDef(ImportLocation nameLoc, StringRef name, Expr value)
 {
     if (!value) value = expr<LiteralOp>(nameLoc, getErrorLiteral());
 
@@ -279,82 +275,64 @@ void ParseDriver::defineExpr(
 }
 
 LogicalResult
-ParseDriver::defineArg(ImportLocation nameLoc, StringRef name, Type type)
+ParseDriver::argDecl(ImportLocation loc, StringRef name, TypeExpr type)
 {
     // NOTE: type can be nullptr and it will still work, no error recovery
     //       necessary.
-    type           = getExpressionType(type);
-    const auto loc = getLocation(nameLoc, name);
-    const auto arg = getBlock()->addArgument(type, loc);
-    return define(Shadow::Outer, Definition(loc, llvm::cast<Expression>(arg)));
+    type             = {getExpressionType(type), loc};
+    const auto opLoc = getLocation(loc, name);
+    const auto arg   = getBlock()->addArgument(type, opLoc);
+    return define(
+        Shadow::Outer,
+        Definition(opLoc, llvm::cast<Expression>(arg)));
 }
 
-FailureOr<Type> ParseDriver::resolveType(ImportLocation nameLoc, StringRef name)
+FailureOr<TypeExpr> ParseDriver::resolveType(ImportLocation loc, StringRef name)
 {
-    const auto sym = resolve(nameLoc, name);
+    const auto sym = resolve(loc, name);
     if (failed(sym)) return failure();
-    if (!*sym) return getErrorType();
-    if (const auto result = (*sym)->dyn_cast<Type>()) return result;
-    if (const auto attr = (*sym)->dyn_cast<LiteralAttr>()) {
-        if (const auto indexAttr = llvm::dyn_cast<ekl::IndexAttr>(attr))
-            return ekl::IndexType::get(getContext(), indexAttr.getValue());
-    }
+    if (!*sym) return TypeExpr{getErrorType(), loc};
+    if (const auto result = (*sym)->dyn_cast<Type>())
+        return TypeExpr{result, loc};
 
     // Definition has the wrong kind.
-    auto diag = emitError(getLocation(nameLoc, name))
+    auto diag = emitError(getLocation(loc, name))
              << "expected type, but found " << (*sym)->getKind() << " '" << name
              << "'";
     diag.attachNote((*sym)->getLoc()) << "defined here";
-    if (failed(recoverFromError())) return failure();
-    return getErrorType();
+    if (failed(recover())) return failure();
+    return TypeExpr{getErrorType(), loc};
 }
 
-FailureOr<LiteralAttr>
-ParseDriver::resolveConst(ImportLocation nameLoc, StringRef name)
+FailureOr<Expr> ParseDriver::resolveExpr(ImportLocation loc, StringRef name)
 {
-    const auto sym = resolve(nameLoc, name);
+    const auto sym = resolve(loc, name);
     if (failed(sym)) return failure();
-    if (!*sym) return LiteralAttr(getErrorLiteral());
-    if (const auto result = (*sym)->dyn_cast<LiteralAttr>()) return result;
+    if (!*sym) return expr<LiteralOp>(loc, getErrorLiteral());
 
-    // Definition has the wrong kind.
-    auto diag = emitError(getLocation(nameLoc, name))
-             << "expected constant, but found " << (*sym)->getKind() << " '"
-             << name << "'";
-    diag.attachNote((*sym)->getLoc()) << "defined here";
-    if (failed(recoverFromError())) return failure();
-    return LiteralAttr(getErrorLiteral());
-}
-
-FailureOr<Expression>
-ParseDriver::resolveExpr(ImportLocation nameLoc, StringRef name)
-{
-    const auto sym = resolve(nameLoc, name);
-    if (failed(sym)) return failure();
-    if (!*sym) return expr<LiteralOp>(nameLoc, getErrorLiteral());
-
-    if (const auto result = (*sym)->dyn_cast<Expression>()) return result;
+    if (const auto result = (*sym)->dyn_cast<Expression>())
+        return Expr{result, loc};
     if (const auto result = (*sym)->dyn_cast<LiteralAttr>()) {
         // Materialize the constant here.
-        return expr<LiteralOp>(nameLoc, result);
+        return expr<LiteralOp>(loc, result);
     }
     if (const auto result = (*sym)->dyn_cast<SymbolOpInterface>()) {
         if (const auto staticOp = llvm::dyn_cast<StaticOp>(result)) {
-            // Materialize the global reference here.
-            return expr<GetStaticOp>(nameLoc, staticOp);
+            // Read from the static reference here.
+            return expr<ReadOp>(loc, expr<GetStaticOp>(loc, staticOp));
         }
     }
 
     // Definition has the wrong kind.
-    auto diag = emitError(getLocation(nameLoc, name))
+    auto diag = emitError(getLocation(loc, name))
              << "expected expression, but found " << (*sym)->getKind() << " '"
              << name << "'";
     diag.attachNote((*sym)->getLoc()) << "defined here";
-    if (failed(recoverFromError())) return failure();
-    return expr<LiteralOp>(nameLoc, getErrorLiteral());
+    if (failed(recover())) return failure();
+    return expr<LiteralOp>(loc, getErrorLiteral());
 }
 
-LogicalResult ParseDriver::declareStatic(
+LogicalResult ParseDriver::staticDecl(
     ImportLocation nameLoc,
     AccessModifier access,
     StringRef name,
@@ -365,13 +343,12 @@ LogicalResult ParseDriver::declareStatic(
 
     // Create a GlobalOp.
     const auto loc = getLocation(nameLoc, name);
-    auto refTy     = llvm::dyn_cast<ABIReferenceType>(type.getValue());
+    auto refTy     = llvm::dyn_cast<ReferenceType>(type.getValue());
     if (!refTy) {
-        if (failed(recoverFromError(type, "expected ABI reference type")))
-            return failure();
+        if (failed(recover(type, "expected reference type"))) return failure();
 
         // Recover from this error by supplying an 'in& u8' reference type.
-        refTy = llvm::cast<ABIReferenceType>(
+        refTy = llvm::cast<ReferenceType>(
             ReferenceType::get(ArrayType::get(getIntegerType(8U, false))));
     }
 
@@ -383,11 +360,50 @@ LogicalResult ParseDriver::declareStatic(
         llvm::cast<SymbolOpInterface>(staticOp.getOperation()));
 }
 
+LogicalResult ParseDriver::outStmt(
+    ImportLocation loc,
+    ImportLocation nameLoc,
+    StringRef name,
+    Expr value)
+{
+    const auto resolveRef = [&](ImportLocation nameLoc,
+                                StringRef name) -> FailureOr<Expr> {
+        const auto sym = resolve(nameLoc, name);
+        if (failed(sym)) return failure();
+        if (!*sym) return expr<LiteralOp>(nameLoc, getErrorLiteral());
+
+        if (const auto result = (*sym)->dyn_cast<Expression>())
+            return Expr{result, nameLoc};
+        if (const auto result = (*sym)->dyn_cast<SymbolOpInterface>()) {
+            if (const auto staticOp = llvm::dyn_cast<StaticOp>(result)) {
+                // Read from the static reference here.
+                return expr<GetStaticOp>(nameLoc, staticOp);
+            }
+        }
+
+        // Definition has the wrong kind.
+        auto diag = emitError(getLocation(nameLoc, name))
+                 << "expected expression, but found " << (*sym)->getKind()
+                 << " '" << name << "'";
+        diag.attachNote((*sym)->getLoc()) << "defined here";
+        if (failed(recover())) return failure();
+        return expr<LiteralOp>(loc, getErrorLiteral());
+    };
+
+    // Resolve the name of the target reference.
+    const auto ref = resolveRef(nameLoc, name);
+    if (failed(ref)) return ref;
+
+    // Write to that reference.
+    create<WriteOp>(loc, *ref, value);
+    return success();
+}
+
 LogicalResult ParseDriver::beginKernel(ImportLocation nameLoc, StringRef name)
 {
     // Create a KernelOp and enter it.
     const auto loc = getLocation(nameLoc, name);
-    auto kernelOp  = m_builder.create<KernelOp>(loc, loc.getName());
+    auto kernelOp  = m_builder.create<KernelOp>(loc, name);
     m_builder.setInsertionPointToStart(kernelOp.getBody());
     LLVM_DEBUG(
         llvm::dbgs()
@@ -399,116 +415,148 @@ LogicalResult ParseDriver::beginKernel(ImportLocation nameLoc, StringRef name)
         llvm::cast<SymbolOpInterface>(kernelOp.getOperation()));
 }
 
-void ParseDriver::beginIf(ImportLocation introLoc, Expr cond, bool withResult)
-{
-    cond = ensure(cond);
-
-    // Create the IfOp and enter its then block.
-    const auto loc = getLocation(introLoc);
-    auto ifOp      = withResult ? m_builder.create<IfOp>(loc, cond, Type{})
-                                : m_builder.create<IfOp>(loc, cond);
-    m_builder.setInsertionPointToStart(ifOp.getThenBranch());
-    LLVM_DEBUG(
-        llvm::dbgs() << "[Parser] begin " << IfOp::getOperationName() << "\n");
-}
-
-void ParseDriver::beginElse()
-{
-    // Create the else branch block and enter it.
-    auto ifOp = llvm::cast<IfOp>(getOp());
-    m_builder.setInsertionPointToStart(ifOp.getElseBranch());
-}
-
-void ParseDriver::beginAssoc(ImportLocation introLoc)
+void ParseDriver::beginAssoc()
 {
     // Create the AssocOp and enter its map body.
-    auto assocOp = m_builder.create<AssocOp>(getLocation(introLoc));
+    auto assocOp = m_builder.create<AssocOp>(getUnknownLoc());
     m_builder.setInsertionPointToStart(assocOp.getMap());
     LLVM_DEBUG(
         llvm::dbgs()
         << "[Parser] begin " << AssocOp::getOperationName() << "\n");
 }
 
-void ParseDriver::beginZip(ImportLocation introLoc, ArrayRef<Expr> exprs)
+void ParseDriver::beginReduce(Expr array, Expr init)
+{
+    auto reduceOp = m_builder.create<ReduceOp>(
+        getUnknownLoc(),
+        array,
+        FunctorBuilderRef{},
+        Type{},
+        init);
+    m_builder.setInsertionPointToStart(reduceOp.getReduction());
+    LLVM_DEBUG(
+        llvm::dbgs()
+        << "[Parser] begin " << ReduceOp::getOperationName() << "\n");
+}
+
+void ParseDriver::beginZip(ArrayRef<Expr> operands)
 {
     // Create the ZipOp and enter its combinator body.
-    auto zipOp = create<ZipOp>(introLoc, exprs);
+    auto zipOp = create<ZipOp>(ImportLocation{}, operands);
     m_builder.setInsertionPointToStart(zipOp.getCombinator());
     LLVM_DEBUG(
         llvm::dbgs() << "[Parser] begin " << ZipOp::getOperationName() << "\n");
 }
 
-LogicalResult ParseDriver::write(
-    ImportLocation opLoc,
-    ImportLocation nameLoc,
-    StringRef name,
-    Expr value)
+void ParseDriver::beginIf(Expr condition)
 {
-    // Resolve the name of the target reference.
-    const auto ref = resolveExpr(nameLoc, name);
-    if (failed(ref)) return ref;
+    condition = ensure(condition);
 
-    // Write to that reference.
-    write(opLoc, {*ref, nameLoc}, value);
-    return success();
+    // Create the IfOp and enter its then block.
+    auto ifOp = m_builder.create<IfOp>(getUnknownLoc(), condition, Type{});
+    m_builder.setInsertionPointToStart(ifOp.getThenBranch());
+    LLVM_DEBUG(
+        llvm::dbgs() << "[Parser] begin " << IfOp::getOperationName() << "\n");
 }
 
-FailureOr<Expression> ParseDriver::call(
+FailureOr<Expr> ParseDriver::call(
+    ImportLocation loc,
     ImportLocation nameLoc,
     StringRef name,
     ArrayRef<Expr> arguments)
 {
-    const auto functionStyleCast = [&](Expr input, Type output) -> Expression {
-        beginZip(input, {input});
-        return yieldAndEnd<ZipOp>(
-            {expr<CoerceOp>(
-                 input,
-                 getOp<ZipOp>().getCombinator()->getArgument(0),
-                 output),
-             input.getLoc()});
+    const auto functionStyleCast = [&](Expr input, Type output) -> Expr {
+        beginZip({input});
+        return {
+            yieldAndEnd<ZipOp>(
+                {expr<CoerceOp>(
+                     loc,
+                     getOp<ZipOp>().getCombinator()->getArgument(0),
+                     output),
+                 loc}),
+            loc};
     };
 
     // Allow function-style casting.
-    if (const auto sym = m_scopes.lookup(name)) {
+    if (const auto sym = lookup(name)) {
         if (const auto type = sym->dyn_cast<Type>())
             return functionStyleCast(arguments.front(), type);
 
         // Other symbols are not callable.
         auto diag = emitError(nameLoc) << "can't call " << sym->getKind();
         diag.attachNote(sym->getLoc()) << "defined here";
-        return recoverFromError();
+        return recover();
     }
 
     if (name == "log") {
         // TODO: Implement.
-        return arguments[0].getValue();
+        return arguments[0];
     } else if (name == "sum") {
         // TODO: Implement.
-        return arguments[0].getValue();
+        return arguments[0];
     }
 
-    if (failed(recoverFromError(nameLoc, "unknown function"))) return failure();
-    return expr<LiteralOp>(nameLoc, getErrorLiteral());
+    if (failed(recover(nameLoc, "unknown function"))) return failure();
+    return expr<LiteralOp>(loc, getErrorLiteral());
 }
 
-void ParseDriver::beginConstexpr(ImportLocation introLoc)
+FailureOr<TypeExpr>
+ParseDriver::refType(ImportLocation loc, ReferenceKind kind, TypeExpr pointee)
+{
+    pointee = ensure(pointee);
+
+    auto arrayTy = llvm::dyn_cast<ArrayType>(pointee.getValue());
+    if (!arrayTy) {
+        if (failed(recover(pointee, "expected array type"))) return failure();
+
+        // Recover from this error by supplying a 'Number[]' array type.
+        arrayTy = ArrayType::get(getNumberType());
+    }
+
+    return TypeExpr{ReferenceType::get(arrayTy, kind), loc};
+}
+
+FailureOr<TypeExpr>
+ParseDriver::arrayType(ImportLocation loc, TypeExpr scalar, Extents extents)
+{
+    scalar = ensure(scalar);
+
+    auto scalarTy = llvm::dyn_cast<ScalarType>(scalar.getValue());
+    if (!scalarTy) {
+        if (failed(recover(scalar, "expected scalar type"))) return failure();
+
+        // Recover from this error by supplying the number type.
+        scalarTy = getNumberType();
+    }
+
+    if (hasNoElements(extents.getValue())) {
+        if (failed(recover(extents, "array is empty"))) return failure();
+
+        // Recover from this error by making those extents 1.
+        for (auto &extent : extents.getValue())
+            if (extent == 0) extent = 1UL;
+    }
+
+    return TypeExpr{ArrayType::get(scalarTy, extents.getValue()), loc};
+}
+
+void ParseDriver::beginConstexpr()
 {
     // Start a constexpr scope by beginning an AssocOp.
-    auto cexprOp = create<ConstexprOp>(introLoc);
+    auto cexprOp = m_builder.create<ConstexprOp>(getUnknownLoc());
     m_builder.setInsertionPointToStart(cexprOp.getBody());
-    pushScope(introLoc);
 }
 
-FailureOr<LiteralAttr> ParseDriver::evalConstexpr(Expr expr)
+FailureOr<ConstExpr> ParseDriver::endConstexpr(Expr expr)
 {
-    // Finish the constexpr scope by closing the AssocOp.
-    popScope();
+    // Finish the constexpr scope by closing the ConstexprOp.
     create<YieldOp>(expr.getLoc(), expr);
-    auto cexprOp = end<ConstexprOp>();
+    auto cexprOp   = end<ConstexprOp>();
+    const auto loc = getLocation(expr.getLoc());
+    cexprOp->setLoc(loc);
 
     // Install a temporary diagnostic handler so that the user is not confused
     // as to where the type-checking and verification errors come from.
-    const auto loc = getLocation(expr);
     ScopedDiagnosticHandler diagHandler(getContext(), [&](Diagnostic &diag) {
         diag.attachNote(loc) << "while evaluating this constant expression";
         return failure();
@@ -536,7 +584,7 @@ FailureOr<LiteralAttr> ParseDriver::evalConstexpr(Expr expr)
 
         return failure();
     }();
-    if (succeeded(result)) return *result;
+    if (succeeded(result)) return ConstExpr{*result, expr.getLoc()};
 
     LLVM_DEBUG(
         llvm::dbgs() << "[Parser] failed to fold constant expression:\n";
@@ -544,14 +592,15 @@ FailureOr<LiteralAttr> ParseDriver::evalConstexpr(Expr expr)
         llvm::dbgs() << "\n";);
 
     cexprOp.erase();
-    if (failed(recoverFromError(
+    if (failed(recover(
             expr.getLoc(),
             "expression did not evaluate to a constant")))
         return failure();
-    return LiteralAttr(getErrorLiteral());
+    return ConstExpr{LiteralAttr(getErrorLiteral()), expr.getLoc()};
 }
 
-FailureOr<SmallVector<extent_t>> ParseDriver::extents(ArrayRef<ConstExpr> exprs)
+FailureOr<Extents>
+ParseDriver::extents(ImportLocation loc, ArrayRef<ConstExpr> exprs)
 {
     // Make the result extents, accumulating all errors in the process.
     SmallVector<ImportLocation> errors;
@@ -582,54 +631,10 @@ FailureOr<SmallVector<extent_t>> ParseDriver::extents(ArrayRef<ConstExpr> exprs)
 
     // Report all the errors at once.
     for (auto errorLoc : errors)
-        if (failed(recoverFromError(
-                errorLoc,
-                "value is not a valid array extent")))
+        if (failed(recover(errorLoc, "value is not a valid array extent")))
             return failure();
 
-    return std::move(result);
-}
-
-FailureOr<ReferenceType>
-ParseDriver::referenceType(ReferenceKind kind, TypeExpr pointee)
-{
-    pointee = ensure(pointee);
-
-    auto arrayTy = llvm::dyn_cast<ArrayType>(pointee.getValue());
-    if (!arrayTy) {
-        if (failed(recoverFromError(pointee, "expected array type")))
-            return failure();
-
-        // Recover from this error by supplying a 'Number[]' array type.
-        arrayTy = ArrayType::get(getNumberType());
-    }
-
-    return ReferenceType::get(arrayTy, kind);
-}
-
-FailureOr<ArrayType> ParseDriver::arrayType(TypeExpr scalar, Extents extents)
-{
-    scalar = ensure(scalar);
-
-    auto scalarTy = llvm::dyn_cast<ScalarType>(scalar.getValue());
-    if (!scalarTy) {
-        if (failed(recoverFromError(scalar, "expected scalar type")))
-            return failure();
-
-        // Recover from this error by supplying the number type.
-        scalarTy = getNumberType();
-    }
-
-    if (hasNoElements(extents.getValue())) {
-        if (failed(recoverFromError(extents, "array is empty")))
-            return failure();
-
-        // Recover from this error by making those extents 1.
-        for (auto &extent : extents.getValue())
-            if (extent == 0) extent = 1UL;
-    }
-
-    return ArrayType::get(scalarTy, extents.getValue());
+    return Extents{std::move(result), loc};
 }
 
 Operation *ParseDriver::endImpl()
@@ -658,29 +663,24 @@ LogicalResult ParseDriver::define(Shadow shadow, Definition def)
              << def.getKind() << " with name '" << def.getName()
              << "' has already been defined";
     diag.attachNote(result.first->getLoc()) << "previous definition is here";
-    return recoverFromError();
+    return recover();
 }
 
-FailureOr<const Definition *>
-ParseDriver::resolve(ImportLocation nameLoc, StringRef name)
+const Definition *ParseDriver::lookup(StringRef name)
 {
     if (const auto sym = m_scopes.lookup(name)) return sym;
 
-    if (const auto builtin = resolveBuiltin(name)) {
+    if (const auto builtin = lookupBuiltin(name)) {
         // Cache the definition of this builtin.
         const auto [sym, ok] = getFileScope().insert(*builtin);
         assert(ok);
         return sym;
     }
 
-    if (failed(recoverFromError(
-            nameLoc,
-            llvm::Twine("unknown symbol '").concat(name).concat("'"))))
-        return failure();
-    return static_cast<const Definition *>(nullptr);
+    return nullptr;
 }
 
-std::optional<Definition> ParseDriver::resolveBuiltin(StringRef name)
+std::optional<Definition> ParseDriver::lookupBuiltin(StringRef name)
 {
     const auto loc =
         NameLoc::get(m_builder.getStringAttr(name), m_builder.getUnknownLoc());
@@ -707,4 +707,16 @@ std::optional<Definition> ParseDriver::resolveBuiltin(StringRef name)
     }
 
     return std::nullopt;
+}
+
+FailureOr<const Definition *>
+ParseDriver::resolve(ImportLocation nameLoc, StringRef name)
+{
+    if (const auto sym = lookup(name)) return sym;
+
+    if (failed(recover(
+            nameLoc,
+            llvm::Twine("unknown symbol '").concat(name).concat("'"))))
+        return failure();
+    return static_cast<const Definition *>(nullptr);
 }

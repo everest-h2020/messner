@@ -254,7 +254,7 @@ void mlir::ekl::populateImplementPatterns(RewritePatternSet &patterns)
     patterns.add<ImplementRelational, ImplementArithmetic>(
         patterns.getContext());
     patterns.add<ImplementChoice>(patterns.getContext());
-    // patterns.add<InlineAssoc>(patterns.getContext());
+    patterns.add<InlineAssoc>(patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
