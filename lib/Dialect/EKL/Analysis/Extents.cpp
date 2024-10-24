@@ -19,7 +19,7 @@ FailureOr<extent_t> mlir::ekl::flatten(ExtentRange extents)
 }
 
 LogicalResult
-mlir::ekl::broadcast(SmallVectorImpl<extent_t> &lhs, ExtentRange rhs)
+mlir::ekl::broadcast(llvm::SmallVectorImpl<extent_t> &lhs, ExtentRange rhs)
 {
     // Handle scalar broadcasting.
     if (lhs.empty()) {

@@ -446,8 +446,8 @@ extent-spec                 : '[' const-expr-list-0[extents] ']'                
 // of the EKL dialect.
 //
 // Since the expression parser will insert local operations, pushing a constexpr
-// scope creates an ephemereal container region at the current location, which
-// is deleted when the scope is popped.
+// scope creates an ephemeral container region at the current location, which is
+// deleted when the scope is popped.
 
 const-expr                  :                                                   { driver.beginConstexpr(); }
                               expr                                              { $$ = CHECK_VAL(driver.endConstexpr($expr)); }

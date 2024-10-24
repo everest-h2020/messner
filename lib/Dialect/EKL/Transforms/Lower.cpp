@@ -246,7 +246,7 @@ struct ExpandEllipsisSubscript : OpRewritePattern<SubscriptOp> {
         SmallVector<Value> identities(expand, identity);
 
         // Replace the single ellipsis operand with that many identity literals.
-        rewriter.updateRootInPlace(op, [&]() {
+        rewriter.modifyOpInPlace(op, [&]() {
             op->setOperands(
                 op.getSubscripts().getBeginOperandIndex(),
                 1U,

@@ -34,7 +34,7 @@ protected:
         if (!update) return failure();
 
         // Perform a bulk update on the target operation.
-        rewriter.updateRootInPlace(op, [&]() {
+        rewriter.modifyOpInPlace(op, [&]() {
             op->setOperands(
                 operands.getBeginOperandIndex(),
                 operands.size(),

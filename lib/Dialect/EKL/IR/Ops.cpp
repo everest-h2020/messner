@@ -591,7 +591,7 @@ LogicalResult StaticOp::canonicalize(StaticOp op, PatternRewriter &rewriter)
         || op.isReadable())
         return failure();
 
-    rewriter.updateRootInPlace(op, [&]() { op.removeInitializerAttr(); });
+    rewriter.modifyOpInPlace(op, [&]() { op.removeInitializerAttr(); });
     return success();
 }
 

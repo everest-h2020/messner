@@ -59,7 +59,7 @@ struct UnifyWriteValue : OpRewritePattern<WriteOp>, ImplicitCast {
             op.getReference().getType().getTypeBound());
         return unifyOperands(
             rewriter,
-            op.getValueMutable(),
+            OperandRange(&op.getValueMutable(), 1),
             refTy.getArrayType());
     }
 };
@@ -131,8 +131,10 @@ struct BroadcastAndUnifyChoiceOperands : OpRewritePattern<ChoiceOp>,
         const auto selTy = op.getSelector().getType().getTypeBound();
         const auto selExtents =
             altTy.getExtents().take_front(getExtents(selTy)->size());
-        updated |= succeeded(
-            broadcastOperands(rewriter, op.getSelectorMutable(), selExtents));
+        updated |= succeeded(broadcastOperands(
+            rewriter,
+            OperandRange(&op.getSelectorMutable(), 1),
+            selExtents));
 
         return success(updated);
     }

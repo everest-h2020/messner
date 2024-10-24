@@ -158,7 +158,7 @@ struct DecayCoercedArithmetic
             return failure();
 
         // Replace the coersion.
-        rewriter.updateRootInPlace(op, [&]() {
+        rewriter.modifyOpInPlace(op, [&]() {
             op->getResult(0).setType(
                 ExpressionType::get(getContext(), resultTy));
         });
