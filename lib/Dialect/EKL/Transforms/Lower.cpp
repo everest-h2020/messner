@@ -188,7 +188,7 @@ struct RewriteIfToChoice : OpRewritePattern<IfOp> {
         const auto trueValue   = op.getThenExpression();
         const auto falseValue  = op.getElseExpression();
         const auto definedInIf = [&](Value value) {
-            if (const auto result = llvm::cast<OpResult>(value))
+            if (const auto result = llvm::dyn_cast<OpResult>(value))
                 return op->isAncestor(result.getOwner());
             return op->isAncestor(
                 llvm::cast<BlockArgument>(value).getOwner()->getParentOp());
