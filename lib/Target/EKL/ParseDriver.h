@@ -323,6 +323,11 @@ public:
 
     FailureOr<TypeExpr>
     refType(ImportLocation loc, ReferenceKind kind, TypeExpr pointee);
+    FailureOr<TypeExpr> typeCtor(
+        ImportLocation loc,
+        ImportLocation nameLoc,
+        StringRef name,
+        ArrayRef<ConstExpr> params);
     FailureOr<TypeExpr>
     arrayType(ImportLocation loc, TypeExpr scalar, Extents extents);
 

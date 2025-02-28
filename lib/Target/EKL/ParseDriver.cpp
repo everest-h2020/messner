@@ -516,6 +516,37 @@ ParseDriver::refType(ImportLocation loc, ReferenceKind kind, TypeExpr pointee)
     return TypeExpr{ReferenceType::get(arrayTy, kind), loc};
 }
 
+FailureOr<TypeExpr> ParseDriver::typeCtor(
+    ImportLocation loc,
+    ImportLocation nameLoc,
+    StringRef name,
+    ArrayRef<ConstExpr> params)
+{
+    if (name == "index") {
+        if (params.size() != 1) {
+            if (failed(recover(loc, "expected 1 type parameter")))
+                return failure();
+            return TypeExpr{getErrorType(), loc};
+        }
+
+        const auto boundAttr =
+            llvm::dyn_cast<ekl::IndexAttr>(params.front().getValue());
+        if (!boundAttr) {
+            auto diag = emitError(params.front().getLoc())
+                     << "expected index value";
+            diag.attachNote(getLocation(loc))
+                << "while constructing index type";
+            if (failed(recover())) return failure();
+            return TypeExpr{getErrorType(), loc};
+        }
+
+        return TypeExpr{getIndexType(boundAttr.getValue()), loc};
+    }
+
+    if (failed(recover(nameLoc, "unknown type constructor"))) return failure();
+    return TypeExpr{getErrorType(), loc};
+}
+
 FailureOr<TypeExpr>
 ParseDriver::arrayType(ImportLocation loc, TypeExpr scalar, Extents extents)
 {

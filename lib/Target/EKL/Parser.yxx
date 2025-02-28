@@ -415,6 +415,7 @@ type-expr                   : type-expr-0
 
 type-expr-0                 : type-expr-1
                             | type-expr-1[scalar] extent-spec[extents]          { $$ = CHECK_VAL(driver.arrayType(@$, $scalar, $extents)); }
+                            | ID[ctor] '(' const-expr-list-0[params] ')'        { $$ = CHECK_VAL(driver.typeCtor(@$, @ctor, $ctor, $params)); }
                             ;
 
 type-expr-1                 : ID                                                { $$ = CHECK_VAL(driver.resolveType(@1, $1)); }
