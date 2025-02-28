@@ -5,6 +5,7 @@
 
 #include "messner/Dialect/EKL/IR/Ops.h"
 
+#include "messner/Dialect/EKL/IR/Attributes.h"
 #include "messner/Dialect/EKL/IR/EKL.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <mlir/IR/OpDefinition.h>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -1947,12 +1949,42 @@ LogicalResult AddOp::typeCheck(AbstractTypeChecker &typeChecker)
         });
 }
 
+OpFoldResult AddOp::fold(FoldAdaptor adaptor)
+{
+    const auto lhs =
+        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getLhs());
+    const auto rhs =
+        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getRhs());
+    if (!lhs || !rhs) return {};
+
+    extent_t result = 0;
+    if (__builtin_add_overflow(lhs.getValue(), rhs.getValue(), &result))
+        return {};
+
+    return ekl::IndexAttr::get(getContext(), result);
+}
+
 LogicalResult SubtractOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
     return typeCheckArithmeticOp(
         adaptor,
         [](ArrayRef<uint64_t> bounds) -> uint64_t { return bounds[0]; });
+}
+
+OpFoldResult SubtractOp::fold(FoldAdaptor adaptor)
+{
+    const auto lhs =
+        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getLhs());
+    const auto rhs =
+        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getRhs());
+    if (!lhs || !rhs) return {};
+
+    extent_t result = 0;
+    if (__builtin_sub_overflow(lhs.getValue(), rhs.getValue(), &result))
+        return {};
+
+    return ekl::IndexAttr::get(getContext(), result);
 }
 
 LogicalResult MultiplyOp::typeCheck(AbstractTypeChecker &typeChecker)
@@ -1965,6 +1997,21 @@ LogicalResult MultiplyOp::typeCheck(AbstractTypeChecker &typeChecker)
                 return ekl::IndexType::kUnbounded;
             return bounds[0] * bounds[1];
         });
+}
+
+OpFoldResult MultiplyOp::fold(FoldAdaptor adaptor)
+{
+    const auto lhs =
+        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getLhs());
+    const auto rhs =
+        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getRhs());
+    if (!lhs || !rhs) return {};
+
+    extent_t result = 0;
+    if (__builtin_mul_overflow(lhs.getValue(), rhs.getValue(), &result))
+        return {};
+
+    return ekl::IndexAttr::get(getContext(), result);
 }
 
 LogicalResult DivideOp::typeCheck(AbstractTypeChecker &typeChecker)

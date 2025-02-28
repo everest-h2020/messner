@@ -1404,12 +1404,15 @@ def EKL_NegateOp : EKL_UnaryOperator<"neg", [EKL_ArithmeticOp]> {
 }
 def EKL_AddOp : EKL_BinaryOperator<"add", [EKL_ArithmeticOp]> {
     let summary = "Addition operator";
+    let hasFolder = 1;
 }
 def EKL_SubtractOp : EKL_BinaryOperator<"sub", [EKL_ArithmeticOp]> {
     let summary = "Subtraction operator";
+    let hasFolder = 1;
 }
 def EKL_MultiplyOp : EKL_BinaryOperator<"mul", [EKL_ArithmeticOp]> {
     let summary = "Multiplication operator";
+    let hasFolder = 1;
 }
 def EKL_DivideOp : EKL_BinaryOperator<"div", [EKL_ArithmeticOp]> {
     let summary = "Division operator";
