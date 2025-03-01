@@ -1283,6 +1283,7 @@ def EKL_CoerceOp : EKL_CastBase<"coerce"> {
     }];
 
     let hasFolder = 1;
+    let hasCanonicalizeMethod = 1;
 }
 
 //===----------------------------------------------------------------------===//

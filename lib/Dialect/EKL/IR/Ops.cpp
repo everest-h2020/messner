@@ -5,6 +5,7 @@
 
 #include "messner/Dialect/EKL/IR/Ops.h"
 
+#include "messner/Dialect/EKL/Analysis/AbstractTypeChecker.h"
 #include "messner/Dialect/EKL/IR/Attributes.h"
 #include "messner/Dialect/EKL/IR/EKL.h"
 #include "mlir/IR/Matchers.h"
@@ -1728,6 +1729,17 @@ LogicalResult CoerceOp::typeCheck(AbstractTypeChecker &typeChecker)
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
     return adaptor.coerce(getOperand(), getType().getTypeBound());
+}
+
+LogicalResult
+CoerceOp::canonicalize(CoerceOp op, ::mlir::PatternRewriter &rewriter)
+{
+    const auto inTy  = getTypeBound(op.getOperand());
+    const auto outTy = getTypeBound(op.getResult().getType());
+    if (!isSubtype(inTy, outTy)) return failure();
+
+    rewriter.replaceOpWithNewOp<UnifyOp>(op, op.getOperand(), outTy);
+    return success();
 }
 
 //===----------------------------------------------------------------------===//
