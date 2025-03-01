@@ -63,6 +63,7 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
     kernel.addPass(createDecayNumberPass());
     kernel.addPass(createHomogenizePass());
     kernel.addPass(createImplementPass());
+    kernel.addPass(createCanonicalizerPass());
 
     // Run the pass manager on the module.
     if (failed(passManager.run(result->getOperation()))) return {};
