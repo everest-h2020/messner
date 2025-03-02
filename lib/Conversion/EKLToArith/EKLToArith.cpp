@@ -65,10 +65,54 @@ struct LowerUnify : OpConversionPattern<ekl::UnifyOp> {
         ekl::UnifyOp::Adaptor adaptor,
         ConversionPatternRewriter &rewriter) const final
     {
+        const auto inTy = getTypeBound(op.getOperand());
         const auto resultTy =
             getTypeConverter()->convertType(op.getResult().getType());
 
-        return failure();
+        if (adaptor.getOperand().getType() == resultTy) {
+            // Eliminate no-op casts.
+            rewriter.replaceOp(op, {adaptor.getOperand()});
+            return success();
+        }
+
+        if (resultTy.isInteger()) {
+            // Can only be integer extension.
+            if (inTy.isSignedInteger()) {
+                rewriter.replaceOpWithNewOp<arith::ExtSIOp>(
+                    op,
+                    resultTy,
+                    adaptor.getOperand());
+            } else {
+                rewriter.replaceOpWithNewOp<arith::ExtUIOp>(
+                    op,
+                    resultTy,
+                    adaptor.getOperand());
+            }
+            return success();
+        }
+
+        if (inTy.isInteger()) {
+            // Can only be int-to-float cast.
+            if (inTy.isSignedInteger()) {
+                rewriter.replaceOpWithNewOp<arith::SIToFPOp>(
+                    op,
+                    resultTy,
+                    adaptor.getOperand());
+            } else {
+                rewriter.replaceOpWithNewOp<arith::UIToFPOp>(
+                    op,
+                    resultTy,
+                    adaptor.getOperand());
+            }
+            return success();
+        }
+
+        // Can only be float extension.
+        rewriter.replaceOpWithNewOp<arith::ExtFOp>(
+            op,
+            resultTy,
+            adaptor.getOperand());
+        return success();
     }
 };
 
@@ -80,10 +124,63 @@ struct LowerCoerce : OpConversionPattern<ekl::CoerceOp> {
         ekl::CoerceOp::Adaptor adaptor,
         ConversionPatternRewriter &rewriter) const final
     {
+        const auto inTy = getTypeBound(op.getOperand());
         const auto resultTy =
             getTypeConverter()->convertType(op.getResult().getType());
 
-        return failure();
+        if (adaptor.getOperand().getType() == resultTy) {
+            // Eliminate no-op casts.
+            rewriter.replaceOp(op, {adaptor.getOperand()});
+            return success();
+        }
+
+        if (!resultTy.isInteger() && !inTy.isInteger()) {
+            // Can only be float truncation.
+            rewriter.replaceOpWithNewOp<arith::TruncFOp>(
+                op,
+                resultTy,
+                adaptor.getOperand());
+            return success();
+        }
+
+        if (resultTy.isInteger() && inTy.isInteger()) {
+            // Can only be integer truncation.
+            rewriter.replaceOpWithNewOp<arith::TruncIOp>(
+                op,
+                resultTy,
+                adaptor.getOperand());
+            return success();
+        }
+
+        if (resultTy.isInteger() && !inTy.isInteger()) {
+            // Can only be float-to-int cast.
+            if (getTypeBound(op.getResult()).isSignedInteger()) {
+                rewriter.replaceOpWithNewOp<arith::FPToSIOp>(
+                    op,
+                    resultTy,
+                    adaptor.getOperand());
+            } else {
+                rewriter.replaceOpWithNewOp<arith::FPToUIOp>(
+                    op,
+                    resultTy,
+                    adaptor.getOperand());
+            }
+            return success();
+        }
+
+        // Can only be int-to-float cast.
+        if (inTy.isSignedInteger()) {
+            rewriter.replaceOpWithNewOp<arith::SIToFPOp>(
+                op,
+                resultTy,
+                adaptor.getOperand());
+        } else {
+            rewriter.replaceOpWithNewOp<arith::UIToFPOp>(
+                op,
+                resultTy,
+                adaptor.getOperand());
+        }
+        return success();
     }
 };
 
