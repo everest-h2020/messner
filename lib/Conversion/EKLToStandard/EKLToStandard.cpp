@@ -1,9 +1,9 @@
-/// Implements the ConvertEKLToArithPass.
+/// Implements the ConvertEKLToStandardPass.
 ///
 /// @file
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
 
-#include "messner/Conversion/EKLToArith/EKLToArith.h"
+#include "messner/Conversion/EKLToStandard/EKLToStandard.h"
 
 #include "messner/Dialect/EKL/Analysis/Casting.h"
 #include "messner/Dialect/EKL/Enums.h"
@@ -11,6 +11,9 @@
 #include "messner/Dialect/EKL/IR/TypeUtils.h"
 #include "messner/Dialect/EKL/IR/Types.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Dialect/Index/IR/IndexOps.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -29,7 +32,7 @@ using namespace mlir::ekl;
 
 namespace messner {
 
-#define GEN_PASS_DEF_CONVERTEKLTOARITH
+#define GEN_PASS_DEF_CONVERTEKLTOSTANDARD
 #include "messner/Conversion/Passes.h.inc"
 
 } // namespace messner
@@ -432,16 +435,16 @@ using LowerRemainder = LowerClosedBinarySignedOp<
 
 namespace {
 
-struct ConvertEKLToArithPass
-        : messner::impl::ConvertEKLToArithBase<ConvertEKLToArithPass> {
-    using ConvertEKLToArithBase::ConvertEKLToArithBase;
+struct ConvertEKLToStandardPass
+        : messner::impl::ConvertEKLToStandardBase<ConvertEKLToStandardPass> {
+    using ConvertEKLToStandardBase::ConvertEKLToStandardBase;
 
     void runOnOperation() override;
 };
 
 } // namespace
 
-void ConvertEKLToArithPass::runOnOperation()
+void ConvertEKLToStandardPass::runOnOperation()
 {
     ConversionTarget target(getContext());
     RewritePatternSet patterns(&getContext());
@@ -524,7 +527,7 @@ void ConvertEKLToArithPass::runOnOperation()
                        op->getResult(0).getType());
     };
 
-    messner::populateConvertEKLToArithPatterns(eklConverter, patterns);
+    messner::populateConvertEKLToStandardPatterns(eklConverter, patterns);
 
     target.addDynamicallyLegalOp<ekl::UnifyOp, ekl::CoerceOp>(
         isCastArithIllegal);
@@ -554,7 +557,7 @@ void ConvertEKLToArithPass::runOnOperation()
         signalPassFailure();
 }
 
-void messner::populateConvertEKLToArithPatterns(
+void messner::populateConvertEKLToStandardPatterns(
     TypeConverter &typeConverter,
     RewritePatternSet &patterns)
 {
@@ -575,7 +578,7 @@ void messner::populateConvertEKLToArithPatterns(
         LowerRemainder>(typeConverter, patterns.getContext());
 }
 
-std::unique_ptr<Pass> messner::createConvertEKLToArithPass()
+std::unique_ptr<Pass> messner::createConvertEKLToStandardPass()
 {
-    return std::make_unique<ConvertEKLToArithPass>();
+    return std::make_unique<ConvertEKLToStandardPass>();
 }

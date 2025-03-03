@@ -5,10 +5,9 @@
 
 #pragma once
 
-#include "messner/Conversion/EKLToArith/EKLToArith.h"
 #include "messner/Conversion/EKLToFunc/EKLToFunc.h"
-#include "messner/Conversion/EKLToIndex/EKLToIndex.h"
 #include "messner/Conversion/EKLToLinalg/EKLToLinalg.h"
+#include "messner/Conversion/EKLToStandard/EKLToStandard.h"
 
 namespace messner {
 

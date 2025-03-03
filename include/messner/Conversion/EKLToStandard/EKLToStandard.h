@@ -1,4 +1,4 @@
-/// Declares the ekl-to-index conversion pass.
+/// Declares the ekl-to-standard conversion pass.
 ///
 /// @file
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
@@ -10,14 +10,14 @@
 
 namespace messner {
 
-/// Adds the ekl-to-index pass patterns to @p patterns .
-void populateConvertEKLToIndexPatterns(
+/// Adds the ekl-to-standard pass patterns to @p patterns .
+void populateConvertEKLToStandardPatterns(
     mlir::TypeConverter &converter,
     mlir::RewritePatternSet &patterns);
 
-#define GEN_PASS_DECL_CONVERTEKLTOINDEX
+#define GEN_PASS_DECL_CONVERTEKLTOSTANDARD
 #include "messner/Conversion/Passes.h.inc"
 
-std::unique_ptr<mlir::Pass> createConvertEKLToIndexPass();
+std::unique_ptr<mlir::Pass> createConvertEKLToStandardPass();
 
 } // namespace messner

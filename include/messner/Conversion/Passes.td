@@ -10,20 +10,6 @@
 include "mlir/Pass/PassBase.td"
 
 //===----------------------------------------------------------------------===//
-// EKLToArith
-//===----------------------------------------------------------------------===//
-
-def ConvertEKLToArith : Pass<"ekl-to-arith"> {
-    let summary = "Converts EKL arithmetic, logic and relations to arith ops";
-    let description = [{
-        TODO.
-    }];
-
-    let constructor = "messner::createConvertEKLToArithPass()";
-    let dependentDialects = ["ekl::EKLDialect", "arith::ArithDialect"];
-}
-
-//===----------------------------------------------------------------------===//
 // EKLToFunc
 //===----------------------------------------------------------------------===//
 
@@ -38,21 +24,6 @@ def ConvertEKLToFunc : Pass<"ekl-to-func"> {
         "ekl::EKLDialect",
         "func::FuncDialect",
         "bufferization::BufferizationDialect"];
-}
-
-
-//===----------------------------------------------------------------------===//
-// EKLToIndex
-//===----------------------------------------------------------------------===//
-
-def ConvertEKLToIndex : Pass<"ekl-to-index"> {
-    let summary = "Converts compound EKL expressions to index ops";
-    let description = [{
-        TODO.
-    }];
-
-    let constructor = "messner::createConvertEKLToIndexPass()";
-    let dependentDialects = ["ekl::EKLDialect", "index::IndexDialect"];
 }
 
 //===----------------------------------------------------------------------===//
@@ -71,6 +42,24 @@ def ConvertEKLToLinalg : Pass<"ekl-to-linalg"> {
         "tensor::TensorDialect",
         "linalg::LinalgDialect",
         "bufferization::BufferizationDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// EKLToStandard
+//===----------------------------------------------------------------------===//
+
+def ConvertEKLToStandard : Pass<"ekl-to-std"> {
+    let summary = "Converts simple EKL expressions to standard ops";
+    let description = [{
+        TODO.
+    }];
+
+    let constructor = "messner::createConvertEKLToStandardPass()";
+    let dependentDialects = [
+        "ekl::EKLDialect",
+        "arith::ArithDialect",
+        "index::IndexDialect",
+        "math::MathDialect"];
 }
 
 #endif
