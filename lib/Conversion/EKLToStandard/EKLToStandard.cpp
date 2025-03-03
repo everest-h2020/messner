@@ -5,13 +5,10 @@
 
 #include "messner/Conversion/EKLToStandard/EKLToStandard.h"
 
+#include "../EKLConverter.h"
 #include "messner/Dialect/EKL/Analysis/Casting.h"
-#include "messner/Dialect/EKL/Enums.h"
-#include "messner/Dialect/EKL/IR/Base.h"
-#include "messner/Dialect/EKL/IR/Ops.h"
-#include "messner/Dialect/EKL/IR/Traits.h"
+#include "messner/Dialect/EKL/IR/EKL.h"
 #include "messner/Dialect/EKL/IR/TypeUtils.h"
-#include "messner/Dialect/EKL/IR/Types.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/Index/IR/IndexOps.h"
@@ -42,17 +39,6 @@ namespace messner {
 } // namespace messner
 
 //===----------------------------------------------------------------------===//
-
-static Value createUnrealizedCast(
-    OpBuilder &builder,
-    Type resultTy,
-    ValueRange inputs,
-    Location loc)
-{
-    if (inputs.size() != 1) return {};
-    return builder.create<UnrealizedConversionCastOp>(loc, resultTy, inputs)
-        .getResult(0);
-};
 
 namespace {
 
@@ -562,86 +548,7 @@ void ConvertEKLToStandardPass::runOnOperation()
     ConversionTarget target(getContext());
     RewritePatternSet patterns(&getContext());
 
-    // Create a helper TypeConverter to provide arith & index op types.
-    TypeConverter stdConverter;
-    {
-        // Float types pass through unchanged.
-        stdConverter.addConversion([](mlir::FloatType type) { return type; });
-        // Integer types must be converted to signless integers.
-        stdConverter.addConversion([](mlir::IntegerType type) {
-            if (type.isSignless()) return type;
-            return mlir::IntegerType::get(type.getContext(), type.getWidth());
-        });
-        // The index type is converted to the mlir index type.
-        stdConverter.addConversion([](ekl::IndexType type) {
-            return mlir::IndexType::get(type.getContext());
-        });
-
-        // In any case, none of these conversions are actually performed, we
-        // always use an unrealized cast rely on them going away once everything
-        // is converted to standard.
-        stdConverter.addTargetMaterialization(createUnrealizedCast);
-        stdConverter.addSourceMaterialization(createUnrealizedCast);
-    }
-
-    TypeConverter converter;
-    {
-        // Unpack the contained expression type and convert it with the helper.
-        converter.addConversion([&](ekl::ExpressionType exprTy) -> Type {
-            if (const auto boundTy = exprTy.getTypeBound())
-                return stdConverter.convertType(boundTy);
-            return {};
-        });
-
-        // Unwrap expressions as values using the ekl.eval op.
-        converter.addTargetMaterialization(
-            [&](OpBuilder &builder,
-                Type resultTy,
-                ValueRange inputs,
-                Location loc) -> Value {
-                if (inputs.size() != 1) return {};
-                const auto exprTy = llvm::dyn_cast<ekl::ExpressionType>(
-                    inputs.front().getType());
-                if (!exprTy) return {};
-
-                const auto eval = builder
-                                      .create<ekl::EvalOp>(
-                                          loc,
-                                          inputs.front(),
-                                          exprTy.getTypeBound())
-                                      .getResult();
-
-                if (eval.getType() == resultTy) return eval;
-
-                // Use the helper to perform the standard conversion.
-                return stdConverter.materializeTargetConversion(
-                    builder,
-                    loc,
-                    resultTy,
-                    {eval});
-            });
-
-        // Wrap values as expressions using the ekl.intro op.
-        converter.addSourceMaterialization(
-            [&](OpBuilder &builder,
-                ekl::ExpressionType resultTy,
-                ValueRange inputs,
-                Location loc) -> Value {
-                if (inputs.size() != 1) return {};
-
-                auto intro = inputs.front();
-                if (intro.getType() != resultTy.getTypeBound()) {
-                    // Use the helper to perform the standard conversion.
-                    intro = stdConverter.materializeSourceConversion(
-                        builder,
-                        loc,
-                        resultTy.getTypeBound(),
-                        inputs);
-                }
-
-                return builder.create<ekl::IntroOp>(loc, intro);
-            });
-    }
+    auto converter = createEKLConverter();
 
     messner::populateConvertEKLToStandardPatterns(converter, patterns);
 

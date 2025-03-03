@@ -5,6 +5,7 @@
 
 #include "messner/Conversion/EKLToLinalg/EKLToLinalg.h"
 
+#include "../EKLConverter.h"
 #include "messner/Dialect/EKL/IR/EKL.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -42,12 +43,12 @@ void ConvertEKLToLinalgPass::runOnOperation()
     ConversionTarget target(getContext());
     RewritePatternSet patterns(&getContext());
 
-    TypeConverter converter;
-    converter.addConversion([](Type type) { return type; });
+    auto converter = createEKLConverter();
 
     messner::populateConvertEKLToLinalgPatterns(converter, patterns);
 
     target.addLegalDialect<linalg::LinalgDialect>();
+    target.addLegalDialect<tensor::TensorDialect>();
 
     if (failed(applyPartialConversion(
             getOperation(),
