@@ -7,7 +7,9 @@
 
 #include "messner/Dialect/EKL/Analysis/Casting.h"
 #include "messner/Dialect/EKL/Enums.h"
+#include "messner/Dialect/EKL/IR/Base.h"
 #include "messner/Dialect/EKL/IR/Ops.h"
+#include "messner/Dialect/EKL/IR/Traits.h"
 #include "messner/Dialect/EKL/IR/TypeUtils.h"
 #include "messner/Dialect/EKL/IR/Types.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -18,10 +20,12 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
 
+#include <cstdint>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
+#include <mlir/Dialect/Index/IR/IndexAttrs.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinTypes.h>
 
@@ -37,7 +41,29 @@ namespace messner {
 
 } // namespace messner
 
-struct LowerLiteral : OpConversionPattern<ekl::LiteralOp> {
+//===----------------------------------------------------------------------===//
+
+static Value createUnrealizedCast(
+    OpBuilder &builder,
+    Type resultTy,
+    ValueRange inputs,
+    Location loc)
+{
+    if (inputs.size() != 1) return {};
+    return builder.create<UnrealizedConversionCastOp>(loc, resultTy, inputs)
+        .getResult(0);
+};
+
+namespace {
+
+struct ConvertEKLToStandardPass
+        : messner::impl::ConvertEKLToStandardBase<ConvertEKLToStandardPass> {
+    using ConvertEKLToStandardBase::ConvertEKLToStandardBase;
+
+    void runOnOperation() override;
+};
+
+struct ConvertLiteral : OpConversionPattern<ekl::LiteralOp> {
     using OpConversionPattern<ekl::LiteralOp>::OpConversionPattern;
 
     LogicalResult matchAndRewrite(
@@ -45,7 +71,15 @@ struct LowerLiteral : OpConversionPattern<ekl::LiteralOp> {
         ekl::LiteralOp::Adaptor adaptor,
         ConversionPatternRewriter &rewriter) const final
     {
-        auto attr = llvm::dyn_cast<TypedAttr>(adaptor.getValueAttr());
+        if (const auto indexAttr =
+                llvm::dyn_cast<ekl::IndexAttr>(adaptor.getValueAttr())) {
+            rewriter.replaceOpWithNewOp<index::ConstantOp>(
+                op,
+                std::bit_cast<int64_t>(indexAttr.getValue()));
+            return success();
+        }
+
+        auto attr = llvm::cast<TypedAttr>(adaptor.getValueAttr());
         if (const auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(attr)) {
             // Convert to signless integer attribute.
             attr = mlir::IntegerAttr::get(
@@ -55,12 +89,13 @@ struct LowerLiteral : OpConversionPattern<ekl::LiteralOp> {
                 intAttr.getValue());
         }
 
+        assert(llvm::isa<mlir::FloatAttr>(attr));
         rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, attr);
         return success();
     }
 };
 
-struct LowerUnify : OpConversionPattern<ekl::UnifyOp> {
+struct ConvertUnify : OpConversionPattern<ekl::UnifyOp> {
     using OpConversionPattern<ekl::UnifyOp>::OpConversionPattern;
 
     LogicalResult matchAndRewrite(
@@ -68,58 +103,86 @@ struct LowerUnify : OpConversionPattern<ekl::UnifyOp> {
         ekl::UnifyOp::Adaptor adaptor,
         ConversionPatternRewriter &rewriter) const final
     {
-        const auto inTy = getTypeBound(op.getOperand());
-        const auto resultTy =
-            getTypeConverter()->convertType(op.getResult().getType());
+        const auto inTy     = adaptor.getOperand().getType();
+        const auto resultTy = getTypeConverter()->convertType(op.getType());
 
-        if (adaptor.getOperand().getType() == resultTy) {
-            // Eliminate no-op casts.
-            rewriter.replaceOp(op, {adaptor.getOperand()});
+        if (inTy == resultTy) {
+            // index -> index and other no-op conversions.
+            rewriter.replaceOp(op, adaptor.getOperand());
             return success();
-        }
-
-        if (resultTy.isInteger()) {
-            // Can only be integer extension.
-            if (inTy.isSignedInteger()) {
-                rewriter.replaceOpWithNewOp<arith::ExtSIOp>(
+        } else if (inTy.isIndex()) {
+            if (llvm::isa<FloatType>(resultTy)) {
+                // index -> float
+                // Solve this using another legalization step that casts via the
+                // direct integer type to the index type.
+                const auto asInt =
+                    rewriter
+                        .create<ekl::UnifyOp>(
+                            op.getLoc(),
+                            op.getOperand(),
+                            llvm::cast<ekl::IndexType>(
+                                getTypeBound(op.getOperand().getType()))
+                                .getIntegerType())
+                        .getResult();
+                rewriter.replaceOpWithNewOp<ekl::UnifyOp>(
+                    op,
+                    asInt,
+                    getTypeBound(op.getType()));
+                return success();
+            } else if (resultTy.isInteger()) {
+                // index -> int
+                rewriter.replaceOpWithNewOp<index::CastUOp>(
                     op,
                     resultTy,
                     adaptor.getOperand());
-            } else {
-                rewriter.replaceOpWithNewOp<arith::ExtUIOp>(
-                    op,
-                    resultTy,
-                    adaptor.getOperand());
+                return success();
             }
-            return success();
-        }
-
-        if (inTy.isInteger()) {
-            // Can only be int-to-float cast.
-            if (inTy.isSignedInteger()) {
-                rewriter.replaceOpWithNewOp<arith::SIToFPOp>(
-                    op,
-                    resultTy,
-                    adaptor.getOperand());
-            } else {
-                rewriter.replaceOpWithNewOp<arith::UIToFPOp>(
-                    op,
-                    resultTy,
-                    adaptor.getOperand());
+        } else if (inTy.isInteger()) {
+            const auto inSigned =
+                getTypeBound(op.getOperand().getType()).isSignedInteger();
+            if (resultTy.isInteger()) {
+                // int -> int
+                if (inSigned) {
+                    rewriter.replaceOpWithNewOp<arith::ExtSIOp>(
+                        op,
+                        resultTy,
+                        adaptor.getOperand());
+                } else {
+                    rewriter.replaceOpWithNewOp<arith::ExtUIOp>(
+                        op,
+                        resultTy,
+                        adaptor.getOperand());
+                }
+                return success();
+            } else if (llvm::isa<FloatType>(inTy)) {
+                // int -> float
+                if (inSigned) {
+                    rewriter.replaceOpWithNewOp<arith::SIToFPOp>(
+                        op,
+                        resultTy,
+                        adaptor.getOperand());
+                } else {
+                    rewriter.replaceOpWithNewOp<arith::UIToFPOp>(
+                        op,
+                        resultTy,
+                        adaptor.getOperand());
+                }
+                return success();
             }
+        } else if (llvm::isa<FloatType>(inTy)) {
+            // float -> float
+            rewriter.replaceOpWithNewOp<arith::ExtFOp>(
+                op,
+                resultTy,
+                adaptor.getOperand());
             return success();
         }
 
-        // Can only be float extension.
-        rewriter.replaceOpWithNewOp<arith::ExtFOp>(
-            op,
-            resultTy,
-            adaptor.getOperand());
-        return success();
+        return failure();
     }
 };
 
-struct LowerCoerce : OpConversionPattern<ekl::CoerceOp> {
+struct ConvertCoerce : OpConversionPattern<ekl::CoerceOp> {
     using OpConversionPattern<ekl::CoerceOp>::OpConversionPattern;
 
     LogicalResult matchAndRewrite(
@@ -127,67 +190,144 @@ struct LowerCoerce : OpConversionPattern<ekl::CoerceOp> {
         ekl::CoerceOp::Adaptor adaptor,
         ConversionPatternRewriter &rewriter) const final
     {
-        const auto inTy = getTypeBound(op.getOperand());
-        const auto resultTy =
-            getTypeConverter()->convertType(op.getResult().getType());
+        const auto inTy     = adaptor.getOperand().getType();
+        const auto resultTy = getTypeConverter()->convertType(op.getType());
 
-        if (adaptor.getOperand().getType() == resultTy) {
-            // Eliminate no-op casts.
-            rewriter.replaceOp(op, {adaptor.getOperand()});
+        if (inTy == resultTy) {
+            // index -> index and other no-op conversions.
+            rewriter.replaceOp(op, adaptor.getOperand());
             return success();
-        }
-
-        if (!resultTy.isInteger() && !inTy.isInteger()) {
-            // Can only be float truncation.
-            rewriter.replaceOpWithNewOp<arith::TruncFOp>(
+        } else if (inTy.isIndex()) {
+            // index -> ?
+            // Solve this using another legalization step that casts via the
+            // direct integer type.
+            const auto asInt =
+                rewriter
+                    .create<ekl::UnifyOp>(
+                        op.getLoc(),
+                        op.getOperand(),
+                        llvm::cast<ekl::IndexType>(
+                            getTypeBound(op.getOperand().getType()))
+                            .getIntegerType())
+                    .getResult();
+            rewriter.replaceOpWithNewOp<ekl::CoerceOp>(
                 op,
-                resultTy,
-                adaptor.getOperand());
+                asInt,
+                getTypeBound(op.getType()));
             return success();
-        }
-
-        if (resultTy.isInteger() && inTy.isInteger()) {
-            // Can only be integer truncation.
-            rewriter.replaceOpWithNewOp<arith::TruncIOp>(
+        } else if (resultTy.isIndex()) {
+            // ? -> index
+            // Solve this using another legalization step that casts via the
+            // direct integer type.
+            const auto toInt =
+                rewriter
+                    .create<ekl::CoerceOp>(
+                        op.getLoc(),
+                        op.getOperand(),
+                        llvm::cast<ekl::IndexType>(getTypeBound(op.getType()))
+                            .getIntegerType())
+                    .getResult();
+            rewriter.replaceOpWithNewOp<ekl::UnifyOp>(
                 op,
-                resultTy,
-                adaptor.getOperand());
+                toInt,
+                getTypeBound(op.getType()));
             return success();
-        }
-
-        if (resultTy.isInteger() && !inTy.isInteger()) {
-            // Can only be float-to-int cast.
-            if (getTypeBound(op.getResult()).isSignedInteger()) {
-                rewriter.replaceOpWithNewOp<arith::FPToSIOp>(
+        } else if (inTy.isInteger()) {
+            if (resultTy.isInteger()) {
+                // int -> int
+                rewriter.replaceOpWithNewOp<arith::TruncIOp>(
                     op,
                     resultTy,
                     adaptor.getOperand());
-            } else {
-                rewriter.replaceOpWithNewOp<arith::FPToUIOp>(
-                    op,
-                    resultTy,
-                    adaptor.getOperand());
+                return success();
+            } else if (llvm::isa<FloatType>(resultTy)) {
+                // int -> float
+                const auto inSigned =
+                    getTypeBound(op.getOperand().getType()).isSignedInteger();
+                if (inSigned) {
+                    rewriter.replaceOpWithNewOp<arith::SIToFPOp>(
+                        op,
+                        resultTy,
+                        adaptor.getOperand());
+                } else {
+                    rewriter.replaceOpWithNewOp<arith::UIToFPOp>(
+                        op,
+                        resultTy,
+                        adaptor.getOperand());
+                }
+                return success();
             }
-            return success();
+        } else if (llvm::isa<FloatType>(inTy)) {
+            if (resultTy.isInteger()) {
+                // float -> int
+                const auto outSigned =
+                    getTypeBound(op.getType()).isSignedInteger();
+                if (outSigned) {
+                    rewriter.replaceOpWithNewOp<arith::FPToSIOp>(
+                        op,
+                        resultTy,
+                        adaptor.getOperand());
+                } else {
+                    rewriter.replaceOpWithNewOp<arith::FPToUIOp>(
+                        op,
+                        resultTy,
+                        adaptor.getOperand());
+                }
+                return success();
+            } else if (llvm::isa<FloatType>(resultTy)) {
+                // float -> float
+                rewriter.replaceOpWithNewOp<arith::TruncFOp>(
+                    op,
+                    resultTy,
+                    adaptor.getOperand());
+                return success();
+            }
         }
 
-        // Can only be int-to-float cast.
-        if (inTy.isSignedInteger()) {
-            rewriter.replaceOpWithNewOp<arith::SIToFPOp>(
-                op,
-                resultTy,
-                adaptor.getOperand());
-        } else {
-            rewriter.replaceOpWithNewOp<arith::UIToFPOp>(
-                op,
-                resultTy,
-                adaptor.getOperand());
-        }
+        return failure();
+    }
+};
+
+struct ConvertNot : OpConversionPattern<ekl::LogicalNotOp> {
+    using OpConversionPattern<ekl::LogicalNotOp>::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(
+        ekl::LogicalNotOp op,
+        ekl::LogicalNotOp::Adaptor adaptor,
+        ConversionPatternRewriter &rewriter) const final
+    {
+        const auto one = rewriter
+                             .create<arith::ConstantOp>(
+                                 op.getLoc(),
+                                 rewriter.getBoolAttr(true))
+                             .getResult();
+
+        rewriter.replaceOpWithNewOp<arith::XOrIOp>(
+            op,
+            adaptor.getOperand(),
+            one);
         return success();
     }
 };
 
-struct LowerCompare : OpConversionPattern<ekl::CompareOp> {
+template<class Source, class Target>
+struct ConvertLogical : OpConversionPattern<Source> {
+    using OpConversionPattern<Source>::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(
+        Source op,
+        Source::Adaptor adaptor,
+        ConversionPatternRewriter &rewriter) const final
+    {
+        rewriter.replaceOpWithNewOp<Target>(op, adaptor.getOperands());
+        return success();
+    }
+};
+
+using ConvertAnd = ConvertLogical<ekl::LogicalAndOp, arith::AndIOp>;
+using ConvertOr  = ConvertLogical<ekl::LogicalOrOp, arith::OrIOp>;
+
+struct ConvertCompare : OpConversionPattern<ekl::CompareOp> {
     using OpConversionPattern<ekl::CompareOp>::OpConversionPattern;
 
     LogicalResult matchAndRewrite(
@@ -195,7 +335,32 @@ struct LowerCompare : OpConversionPattern<ekl::CompareOp> {
         ekl::CompareOp::Adaptor adaptor,
         ConversionPatternRewriter &rewriter) const final
     {
-        if (!getTypeBound(op.getLhs()).isInteger()) {
+        const auto lhsTy = adaptor.getLhs().getType();
+        if (adaptor.getRhs().getType() != lhsTy) return failure();
+
+        if (lhsTy.isIndex()) {
+            rewriter.replaceOpWithNewOp<index::CmpOp>(
+                op,
+                convertIndexKind(op.getKind()),
+                adaptor.getLhs(),
+                adaptor.getRhs());
+            return success();
+        } else if (lhsTy.isInteger()) {
+            if (lhsTy.isSignedInteger()) {
+                rewriter.replaceOpWithNewOp<arith::CmpIOp>(
+                    op,
+                    convertSIKind(op.getKind()),
+                    adaptor.getLhs(),
+                    adaptor.getRhs());
+            } else {
+                rewriter.replaceOpWithNewOp<arith::CmpIOp>(
+                    op,
+                    convertUIKind(op.getKind()),
+                    adaptor.getLhs(),
+                    adaptor.getRhs());
+            }
+            return success();
+        } else if (llvm::isa<FloatType>(lhsTy)) {
             rewriter.replaceOpWithNewOp<arith::CmpFOp>(
                 op,
                 convertFloatKind(op.getKind()),
@@ -204,21 +369,7 @@ struct LowerCompare : OpConversionPattern<ekl::CompareOp> {
             return success();
         }
 
-        if (getTypeBound(op.getLhs()).isSignedInteger()) {
-            rewriter.replaceOpWithNewOp<arith::CmpIOp>(
-                op,
-                convertSIKind(op.getKind()),
-                adaptor.getLhs(),
-                adaptor.getRhs());
-            return success();
-        }
-
-        rewriter.replaceOpWithNewOp<arith::CmpIOp>(
-            op,
-            convertUIKind(op.getKind()),
-            adaptor.getLhs(),
-            adaptor.getRhs());
-        return success();
+        return failure();
     }
 
 private:
@@ -232,6 +383,19 @@ private:
         case RelationKind::LessOrEqual:    return arith::CmpFPredicate::OLE;
         case RelationKind::GreaterOrEqual: return arith::CmpFPredicate::OGE;
         case RelationKind::GreaterThan:    return arith::CmpFPredicate::OGT;
+        }
+    }
+
+    [[nodiscard]]
+    static index::IndexCmpPredicate convertIndexKind(RelationKind kind)
+    {
+        switch (kind) {
+        case RelationKind::Equivalent:     return index::IndexCmpPredicate::EQ;
+        case RelationKind::Antivalent:     return index::IndexCmpPredicate::NE;
+        case RelationKind::LessThan:       return index::IndexCmpPredicate::ULT;
+        case RelationKind::LessOrEqual:    return index::IndexCmpPredicate::ULE;
+        case RelationKind::GreaterOrEqual: return index::IndexCmpPredicate::UGE;
+        case RelationKind::GreaterThan:    return index::IndexCmpPredicate::UGT;
         }
     }
 
@@ -262,62 +426,13 @@ private:
     }
 };
 
-struct LowerNot : OpConversionPattern<ekl::LogicalNotOp> {
-    using OpConversionPattern<ekl::LogicalNotOp>::OpConversionPattern;
-
-    LogicalResult matchAndRewrite(
-        ekl::LogicalNotOp op,
-        ekl::LogicalNotOp::Adaptor adaptor,
-        ConversionPatternRewriter &rewriter) const final
-    {
-        const auto one = rewriter
-                             .create<arith::ConstantOp>(
-                                 op.getLoc(),
-                                 rewriter.getBoolAttr(true))
-                             .getResult();
-
-        rewriter.replaceOpWithNewOp<arith::XOrIOp>(
-            op,
-            adaptor.getOperand(),
-            one);
-        return success();
-    }
-};
-
-struct LowerAnd : OpConversionPattern<ekl::LogicalAndOp> {
-    using OpConversionPattern<ekl::LogicalAndOp>::OpConversionPattern;
-
-    LogicalResult matchAndRewrite(
-        ekl::LogicalAndOp op,
-        ekl::LogicalAndOp::Adaptor adaptor,
-        ConversionPatternRewriter &rewriter) const final
-    {
-        rewriter.replaceOpWithNewOp<arith::AndIOp>(
-            op,
-            adaptor.getLhs(),
-            adaptor.getRhs());
-        return success();
-    }
-};
-
-struct LowerOr : OpConversionPattern<ekl::LogicalOrOp> {
-    using OpConversionPattern<ekl::LogicalOrOp>::OpConversionPattern;
-
-    LogicalResult matchAndRewrite(
-        ekl::LogicalOrOp op,
-        ekl::LogicalOrOp::Adaptor adaptor,
-        ConversionPatternRewriter &rewriter) const final
-    {
-        rewriter.replaceOpWithNewOp<arith::OrIOp>(
-            op,
-            adaptor.getLhs(),
-            adaptor.getRhs());
-        return success();
-    }
-};
-
-template<class Source, class TargetI, class TargetF>
-struct LowerClosedBinaryOp : OpConversionPattern<Source> {
+template<
+    class Source,
+    class TargetUI,
+    class TargetSI,
+    class TargetF,
+    class TargetIdx = void>
+struct ConvertBinary : OpConversionPattern<Source> {
     using OpConversionPattern<Source>::OpConversionPattern;
 
     LogicalResult matchAndRewrite(
@@ -325,7 +440,34 @@ struct LowerClosedBinaryOp : OpConversionPattern<Source> {
         Source::Adaptor adaptor,
         ConversionPatternRewriter &rewriter) const final
     {
-        if (!getTypeBound(op.getResult()).isInteger()) {
+        const auto lhsTy = adaptor.getLhs().getType();
+        if (adaptor.getRhs().getType() != lhsTy) return failure();
+
+        if constexpr (!std::is_void_v<TargetIdx>) {
+            if (lhsTy.isIndex()) {
+
+                rewriter.replaceOpWithNewOp<TargetIdx>(
+                    op,
+                    adaptor.getLhs(),
+                    adaptor.getRhs());
+                return success();
+            }
+        }
+
+        if (lhsTy.isInteger()) {
+            if (lhsTy.isSignedInteger()) {
+                rewriter.replaceOpWithNewOp<TargetSI>(
+                    op,
+                    adaptor.getLhs(),
+                    adaptor.getRhs());
+            } else {
+                rewriter.replaceOpWithNewOp<TargetUI>(
+                    op,
+                    adaptor.getLhs(),
+                    adaptor.getRhs());
+            }
+            return success();
+        } else if (llvm::isa<FloatType>(lhsTy)) {
             rewriter.replaceOpWithNewOp<TargetF>(
                 op,
                 adaptor.getLhs(),
@@ -333,59 +475,24 @@ struct LowerClosedBinaryOp : OpConversionPattern<Source> {
             return success();
         }
 
-        rewriter.replaceOpWithNewOp<TargetI>(
-            op,
-            adaptor.getLhs(),
-            adaptor.getRhs());
-        return success();
+        return failure();
     }
 };
 
-template<class Source, class TargetUI, class TargetSI, class TargetF>
-struct LowerClosedBinarySignedOp : OpConversionPattern<Source> {
-    using OpConversionPattern<Source>::OpConversionPattern;
-
-    LogicalResult matchAndRewrite(
-        Source op,
-        Source::Adaptor adaptor,
-        ConversionPatternRewriter &rewriter) const final
-    {
-        if (!getTypeBound(op.getResult()).isInteger()) {
-            rewriter.replaceOpWithNewOp<TargetF>(
-                op,
-                adaptor.getLhs(),
-                adaptor.getRhs());
-            return success();
-        }
-
-        if (getTypeBound(op.getResult()).isSignedInteger()) {
-            rewriter.replaceOpWithNewOp<TargetSI>(
-                op,
-                adaptor.getLhs(),
-                adaptor.getRhs());
-            return success();
-        }
-
-        rewriter.replaceOpWithNewOp<TargetUI>(
-            op,
-            adaptor.getLhs(),
-            adaptor.getRhs());
-        return success();
-    }
-};
-
-using LowerMin = LowerClosedBinarySignedOp<
+using ConvertMin = ConvertBinary<
     ekl::MinOp,
     arith::MinUIOp,
     arith::MinSIOp,
-    arith::MinNumFOp>;
-using LowerMax = LowerClosedBinarySignedOp<
+    arith::MinNumFOp,
+    index::MinUOp>;
+using ConvertMax = ConvertBinary<
     ekl::MaxOp,
     arith::MaxUIOp,
     arith::MaxSIOp,
-    arith::MaxNumFOp>;
+    arith::MaxNumFOp,
+    index::MaxUOp>;
 
-struct LowerNegate : OpConversionPattern<ekl::NegateOp> {
+struct ConvertNegate : OpConversionPattern<ekl::NegateOp> {
     using OpConversionPattern<ekl::NegateOp>::OpConversionPattern;
 
     LogicalResult matchAndRewrite(
@@ -393,54 +500,60 @@ struct LowerNegate : OpConversionPattern<ekl::NegateOp> {
         ekl::NegateOp::Adaptor adaptor,
         ConversionPatternRewriter &rewriter) const final
     {
-        if (!getTypeBound(op.getResult()).isInteger()) {
-            rewriter.replaceOpWithNewOp<arith::NegFOp>(
+        const auto inTy = adaptor.getOperand().getType();
+        if (inTy.isInteger()) {
+            const auto zero = rewriter
+                                  .create<arith::ConstantOp>(
+                                      op.getLoc(),
+                                      rewriter.getIntegerAttr(inTy, 0))
+                                  .getResult();
+
+            rewriter.replaceOpWithNewOp<arith::SubIOp>(
                 op,
+                zero,
                 adaptor.getOperand());
+            return success();
+        } else if (llvm::isa<FloatType>(inTy)) {
+            rewriter.replaceOpWithNewOp<math::PowFOp>(op, adaptor.getOperand());
             return success();
         }
 
-        const auto zero =
-            rewriter
-                .create<arith::ConstantOp>(
-                    op.getLoc(),
-                    rewriter.getIntegerAttr(adaptor.getOperand().getType(), 0))
-                .getResult();
-
-        rewriter.replaceOpWithNewOp<arith::SubIOp>(
-            op,
-            zero,
-            adaptor.getOperand());
-        return success();
+        return failure();
     }
 };
 
-using LowerAdd = LowerClosedBinaryOp<ekl::AddOp, arith::AddIOp, arith::AddFOp>;
-using LowerSubtract =
-    LowerClosedBinaryOp<ekl::SubtractOp, arith::SubIOp, arith::SubFOp>;
-using LowerMultiply =
-    LowerClosedBinaryOp<ekl::MultiplyOp, arith::MulIOp, arith::MulFOp>;
-using LowerDivide = LowerClosedBinarySignedOp<
+using ConvertAdd = ConvertBinary<
+    ekl::AddOp,
+    arith::AddIOp,
+    arith::AddIOp,
+    arith::AddFOp,
+    index::AddOp>;
+using ConvertSubtract = ConvertBinary<
+    ekl::SubtractOp,
+    arith::SubIOp,
+    arith::SubIOp,
+    arith::SubFOp,
+    index::SubOp>;
+using ConvertMultiply = ConvertBinary<
+    ekl::MultiplyOp,
+    arith::MulIOp,
+    arith::MulIOp,
+    arith::MulFOp,
+    index::MulOp>;
+using ConvertDivide = ConvertBinary<
     ekl::DivideOp,
     arith::DivUIOp,
     arith::DivSIOp,
-    arith::DivFOp>;
-using LowerRemainder = LowerClosedBinarySignedOp<
+    arith::DivFOp,
+    index::DivUOp>;
+using ConvertRemainder = ConvertBinary<
     ekl::RemainderOp,
     arith::RemUIOp,
     arith::RemSIOp,
-    arith::RemFOp>;
-
-//===----------------------------------------------------------------------===//
-
-namespace {
-
-struct ConvertEKLToStandardPass
-        : messner::impl::ConvertEKLToStandardBase<ConvertEKLToStandardPass> {
-    using ConvertEKLToStandardBase::ConvertEKLToStandardBase;
-
-    void runOnOperation() override;
-};
+    arith::RemFOp,
+    index::RemUOp>;
+using ConvertPower =
+    ConvertBinary<ekl::PowerOp, math::IPowIOp, math::IPowIOp, math::PowFOp>;
 
 } // namespace
 
@@ -449,106 +562,125 @@ void ConvertEKLToStandardPass::runOnOperation()
     ConversionTarget target(getContext());
     RewritePatternSet patterns(&getContext());
 
-    const auto unrealizedCast = [](OpBuilder &builder,
-                                   Type resultTy,
-                                   ValueRange inputs,
-                                   Location loc) -> Value {
-        if (inputs.size() != 1) return {};
-        return builder.create<UnrealizedConversionCastOp>(loc, resultTy, inputs)
-            .getResult(0);
-    };
-
-    TypeConverter arithConverter;
-    arithConverter.addConversion([](mlir::IntegerType intTy) -> Type {
-        if (intTy.isSignless()) return intTy;
-        return mlir::IntegerType::get(intTy.getContext(), intTy.getWidth());
-    });
-    arithConverter.addConversion(
-        [](mlir::FloatType floatTy) -> Type { return floatTy; });
-
-    arithConverter.addTargetMaterialization(unrealizedCast);
-    arithConverter.addSourceMaterialization(unrealizedCast);
-
-    TypeConverter eklConverter;
-    eklConverter.addConversion([&](ekl::ExpressionType exprTy) -> Type {
-        return arithConverter.convertType(exprTy.getTypeBound());
-    });
-
-    eklConverter.addTargetMaterialization(
-        [&](OpBuilder &builder, Type resultTy, ValueRange inputs, Location loc)
-            -> Value {
-            // Unwrap expressions using the EvalOp.
-            if (inputs.size() != 1) return {};
-            const auto exprTy =
-                llvm::dyn_cast<ekl::ExpressionType>(inputs.front().getType());
-            if (!exprTy) return {};
-
-            const auto eval = builder
-                                  .create<ekl::EvalOp>(
-                                      loc,
-                                      inputs.front(),
-                                      exprTy.getTypeBound())
-                                  .getResult();
-
-            if (eval.getType() == resultTy) return eval;
-            return arithConverter
-                .materializeTargetConversion(builder, loc, resultTy, {eval});
+    // Create a helper TypeConverter to provide arith & index op types.
+    TypeConverter stdConverter;
+    {
+        // Float types pass through unchanged.
+        stdConverter.addConversion([](mlir::FloatType type) { return type; });
+        // Integer types must be converted to signless integers.
+        stdConverter.addConversion([](mlir::IntegerType type) {
+            if (type.isSignless()) return type;
+            return mlir::IntegerType::get(type.getContext(), type.getWidth());
         });
-    eklConverter.addSourceMaterialization(
-        [&](OpBuilder &builder, Type resultTy, ValueRange inputs, Location loc)
-            -> Value {
-            // Wrap expressions using the IntroOp.
-            if (inputs.size() != 1) return {};
-            const auto exprTy = llvm::dyn_cast<ExpressionType>(resultTy);
-            if (!exprTy) return {};
+        // The index type is converted to the mlir index type.
+        stdConverter.addConversion([](ekl::IndexType type) {
+            return mlir::IndexType::get(type.getContext());
+        });
 
-            auto intro = inputs.front();
-            if (intro.getType() != exprTy.getTypeBound())
-                intro = arithConverter.materializeSourceConversion(
+        // In any case, none of these conversions are actually performed, we
+        // always use an unrealized cast rely on them going away once everything
+        // is converted to standard.
+        stdConverter.addTargetMaterialization(createUnrealizedCast);
+        stdConverter.addSourceMaterialization(createUnrealizedCast);
+    }
+
+    TypeConverter converter;
+    {
+        // Unpack the contained expression type and convert it with the helper.
+        converter.addConversion([&](ekl::ExpressionType exprTy) -> Type {
+            if (const auto boundTy = exprTy.getTypeBound())
+                return stdConverter.convertType(boundTy);
+            return {};
+        });
+
+        // Unwrap expressions as values using the ekl.eval op.
+        converter.addTargetMaterialization(
+            [&](OpBuilder &builder,
+                Type resultTy,
+                ValueRange inputs,
+                Location loc) -> Value {
+                if (inputs.size() != 1) return {};
+                const auto exprTy = llvm::dyn_cast<ekl::ExpressionType>(
+                    inputs.front().getType());
+                if (!exprTy) return {};
+
+                const auto eval = builder
+                                      .create<ekl::EvalOp>(
+                                          loc,
+                                          inputs.front(),
+                                          exprTy.getTypeBound())
+                                      .getResult();
+
+                if (eval.getType() == resultTy) return eval;
+
+                // Use the helper to perform the standard conversion.
+                return stdConverter.materializeTargetConversion(
                     builder,
                     loc,
-                    exprTy.getTypeBound(),
-                    inputs);
+                    resultTy,
+                    {eval});
+            });
 
-            return builder.create<ekl::IntroOp>(loc, intro);
-        });
+        // Wrap values as expressions using the ekl.intro op.
+        converter.addSourceMaterialization(
+            [&](OpBuilder &builder,
+                ekl::ExpressionType resultTy,
+                ValueRange inputs,
+                Location loc) -> Value {
+                if (inputs.size() != 1) return {};
 
-    const auto isCastArithIllegal = [&](Operation *op) -> bool {
-        return !eklConverter.convertType(op->getOperand(0).getType())
-            || !eklConverter.convertType(op->getResult(0).getType());
+                auto intro = inputs.front();
+                if (intro.getType() != resultTy.getTypeBound()) {
+                    // Use the helper to perform the standard conversion.
+                    intro = stdConverter.materializeSourceConversion(
+                        builder,
+                        loc,
+                        resultTy.getTypeBound(),
+                        inputs);
+                }
+
+                return builder.create<ekl::IntroOp>(loc, intro);
+            });
+    }
+
+    messner::populateConvertEKLToStandardPatterns(converter, patterns);
+
+    // A type is illegal if we don't know how to convert it.
+    const auto isIllegalType = [&](Type type) {
+        return !converter.convertType(type);
     };
-    const auto isArithIllegal = [&](Operation *op) -> bool {
-        const auto arithTy =
-            eklConverter.convertType(op->getResult(0).getType());
-        return !arithTy
-            || op->getNumOperands()
-                   != llvm::count(
-                       op->getOperandTypes(),
-                       op->getResult(0).getType());
+    // An op is illegal if its operand types don't match, or any of its operand
+    // or result types is illegal.
+    const auto isIllegalOp = [&](Operation *op) {
+        if (const auto numOps = op->getNumOperands()) {
+            if (llvm::count(op->getOperandTypes(), op->getOperand(0).getType())
+                != numOps)
+                return true;
+        }
+
+        return llvm::any_of(op->getOperandTypes(), isIllegalType)
+            || llvm::any_of(op->getResultTypes(), isIllegalType);
     };
 
-    messner::populateConvertEKLToStandardPatterns(eklConverter, patterns);
+    target.addDynamicallyLegalOp<ekl::LiteralOp>(isIllegalOp);
+    target.addDynamicallyLegalOp<ekl::UnifyOp>(isIllegalOp);
+    target.addDynamicallyLegalOp<ekl::CoerceOp>(isIllegalOp);
+    target.addDynamicallyLegalDialect<ekl::EKLDialect>([&](Operation *op) {
+        // All logical ops must rewrite to arith.
+        if (op->hasTrait<ekl::OpTrait::IsLogical>()) return false;
+        // All legalizable relational ops rewrite to arith or index.
+        if (op->hasTrait<ekl::OpTrait::IsRelational>()) return isIllegalOp(op);
+        // All legalizable arithmetic ops rewrite to arith, index or math.
+        if (op->hasTrait<ekl::OpTrait::IsArithmetic>()) return isIllegalOp(op);
 
-    target.addDynamicallyLegalOp<ekl::UnifyOp, ekl::CoerceOp>(
-        isCastArithIllegal);
-
-    target.addDynamicallyLegalOp<ekl::LiteralOp>(isArithIllegal);
-    target.addDynamicallyLegalOp<ekl::CompareOp>([&](ekl::CompareOp op) {
-        if (op.getLhs().getType() != op.getRhs().getType()) return true;
-        return !eklConverter.convertType(op.getLhs().getType());
+        // All other ops are assumed legal.
+        return true;
     });
-    target.addDynamicallyLegalOp<ekl::MinOp, ekl::MaxOp>(isArithIllegal);
-    target
-        .addIllegalOp<ekl::LogicalNotOp, ekl::LogicalAndOp, ekl::LogicalOrOp>();
-    target.addDynamicallyLegalOp<
-        ekl::NegateOp,
-        ekl::AddOp,
-        ekl::SubtractOp,
-        ekl::MultiplyOp,
-        ekl::DivideOp,
-        ekl::RemainderOp>(isArithIllegal);
+
     target.addLegalOp<UnrealizedConversionCastOp>();
     target.addLegalDialect<arith::ArithDialect>();
+    target.addLegalDialect<index::IndexDialect>();
+    target.addLegalDialect<math::MathDialect>();
 
     if (failed(applyPartialConversion(
             getOperation(),
@@ -561,21 +693,23 @@ void messner::populateConvertEKLToStandardPatterns(
     TypeConverter &typeConverter,
     RewritePatternSet &patterns)
 {
-    patterns.add<LowerLiteral>(typeConverter, patterns.getContext());
-    patterns.add<LowerUnify, LowerCoerce>(typeConverter, patterns.getContext());
-    patterns.add<LowerNot, LowerAnd, LowerOr>(
-        typeConverter,
-        patterns.getContext());
-    patterns.add<LowerCompare, LowerMin, LowerMax>(
-        typeConverter,
-        patterns.getContext());
     patterns.add<
-        LowerNegate,
-        LowerAdd,
-        LowerSubtract,
-        LowerMultiply,
-        LowerDivide,
-        LowerRemainder>(typeConverter, patterns.getContext());
+        ConvertLiteral,
+        ConvertUnify,
+        ConvertCoerce,
+        ConvertNot,
+        ConvertAnd,
+        ConvertOr,
+        ConvertCompare,
+        ConvertMin,
+        ConvertMax,
+        ConvertNegate,
+        ConvertAdd,
+        ConvertSubtract,
+        ConvertMultiply,
+        ConvertDivide,
+        ConvertRemainder,
+        ConvertPower>(typeConverter, patterns.getContext());
 }
 
 std::unique_ptr<Pass> messner::createConvertEKLToStandardPass()
