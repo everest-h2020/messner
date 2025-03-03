@@ -1,5 +1,5 @@
-add_mlir_conversion_library(EKLToLinalg
-        EKLToLinalg.cpp
+add_mlir_conversion_library(EKLToIndex
+        EKLToIndex.cpp
 
     DEPENDS
         EVPConversionPassesIncGen
@@ -11,8 +11,6 @@ add_mlir_conversion_library(EKLToLinalg
         MLIRDialectUtils
         MLIRTransformUtils
         MLIRPass
-        MLIRBufferizationDialect
-        MLIRLinalgDialect
-        MLIRTensorDialect
+        MLIRIndexDialect
         EKLDialect
 )

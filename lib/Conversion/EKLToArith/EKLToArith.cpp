@@ -544,6 +544,7 @@ void ConvertEKLToArithPass::runOnOperation()
         ekl::MultiplyOp,
         ekl::DivideOp,
         ekl::RemainderOp>(isArithIllegal);
+    target.addLegalOp<UnrealizedConversionCastOp>();
     target.addLegalDialect<arith::ArithDialect>();
 
     if (failed(applyPartialConversion(

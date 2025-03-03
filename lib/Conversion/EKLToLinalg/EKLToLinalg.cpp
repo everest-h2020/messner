@@ -6,7 +6,9 @@
 #include "messner/Conversion/EKLToLinalg/EKLToLinalg.h"
 
 #include "messner/Dialect/EKL/IR/EKL.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
 
