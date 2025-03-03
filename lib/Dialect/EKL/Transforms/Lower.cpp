@@ -199,7 +199,8 @@ struct RewriteIfToChoice : OpRewritePattern<IfOp> {
                                 .create<ChoiceOp>(
                                     op.getLoc(),
                                     op.getCondition(),
-                                    ValueRange{falseValue, trueValue})
+                                    ValueRange{falseValue, trueValue},
+                                    getTypeBound(op.getResult().getType()))
                                 .getResult();
         rewriter.replaceAllUsesWith(op.getResult(), result);
         return success();
