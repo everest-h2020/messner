@@ -475,6 +475,13 @@ OpFoldResult EvalOp::fold(EvalOp::FoldAdaptor adaptor)
 {
     if (!isSpeculatable(*this)) return {};
 
+    if (auto intro = getOperand().getDefiningOp<IntroOp>()) {
+        if (intro.getOperand().getType() == getResult().getType()) {
+            // eval(intro(x : T) : T) = x
+            return intro.getOperand();
+        }
+    }
+
     // Since the result type of the op is not an ExpressionType, the dialect
     // constant materializer will not be able to materialize any attribute
     // returned by this operation.
