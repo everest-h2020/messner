@@ -424,7 +424,7 @@ void mlir::ekl::populateLowerPatterns(RewritePatternSet &patterns)
     patterns.add<ExpandEllipsisSubscript, RewriteSubscriptToAssoc>(
         patterns.getContext());
 
-    patterns.add<RewriteZipToAssoc>(patterns.getContext());
+    patterns.add<DissolveZip, RewriteZipToAssoc>(patterns.getContext());
 
     patterns.add<CollapseAssoc>(patterns.getContext());
 }
