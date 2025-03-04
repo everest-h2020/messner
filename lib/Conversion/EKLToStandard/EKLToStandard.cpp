@@ -548,7 +548,8 @@ void ConvertEKLToStandardPass::runOnOperation()
     ConversionTarget target(getContext());
     RewritePatternSet patterns(&getContext());
 
-    auto converter = createEKLConverter();
+    auto stdConverter = createStandardConverter();
+    auto converter    = createEKLConverter(stdConverter);
 
     messner::populateConvertEKLToStandardPatterns(converter, patterns);
 

@@ -39,9 +39,10 @@ def ConvertEKLToLinalg : Pass<"ekl-to-linalg"> {
     let constructor = "messner::createConvertEKLToLinalgPass()";
     let dependentDialects = [
         "ekl::EKLDialect",
-        "tensor::TensorDialect",
+        "arith::ArithDialect",
+        "bufferization::BufferizationDialect",
         "linalg::LinalgDialect",
-        "bufferization::BufferizationDialect"];
+        "tensor::TensorDialect"];
 }
 
 //===----------------------------------------------------------------------===//

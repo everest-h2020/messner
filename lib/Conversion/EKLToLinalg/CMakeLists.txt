@@ -11,6 +11,7 @@ add_mlir_conversion_library(EKLToLinalg
         MLIRDialectUtils
         MLIRTransformUtils
         MLIRPass
+        MLIRArithDialect
         MLIRBufferizationDialect
         MLIRLinalgDialect
         MLIRTensorDialect
