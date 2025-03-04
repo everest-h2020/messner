@@ -16,6 +16,7 @@
 #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Tensor/Transforms/Transforms.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -158,6 +159,41 @@ struct ConvertChoice : OpConversionPattern<ekl::ChoiceOp> {
             op,
             selected,
             true);
+        return success();
+    }
+};
+
+struct ConvertStack : OpConversionPattern<ekl::StackOp> {
+    using OpConversionPattern<ekl::StackOp>::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(
+        ekl::StackOp op,
+        ekl::StackOp::Adaptor adaptor,
+        ConversionPatternRewriter &rewriter) const final
+    {
+        const auto tensorTy = llvm::cast<RankedTensorType>(
+            getTypeConverter()->convertType(op.getType()));
+
+        SmallVector<int64_t> inShape(tensorTy.getShape());
+        inShape.front() = 1;
+        const auto inTy =
+            RankedTensorType::get(inShape, tensorTy.getElementType());
+        SmallVector<ReassociationIndices> inReassoc;
+        for (auto i : llvm::iota_range<int64_t>(1, inShape.size(), false))
+            inReassoc.emplace_back().push_back(i);
+        inReassoc.front().insert(inReassoc.front().begin(), 0);
+
+        SmallVector<Value> ins;
+        for (auto in : adaptor.getOperands())
+            ins.push_back(rewriter
+                              .create<tensor::ExpandShapeOp>(
+                                  op.getLoc(),
+                                  inTy,
+                                  in,
+                                  inReassoc)
+                              .getResult());
+
+        rewriter.replaceOpWithNewOp<tensor::ConcatOp>(op, 0, ins);
         return success();
     }
 };
@@ -564,6 +600,8 @@ void ConvertEKLToLinalgPass::runOnOperation()
 
     target.addIllegalOp<ekl::ZipOp>();
     target.addIllegalOp<ekl::ChoiceOp>();
+    target.addIllegalOp<ekl::StackOp>();
+    target.addIllegalOp<tensor::ConcatOp>();
     target.addIllegalOp<ekl::AssocOp>();
     target.addDynamicallyLegalOp<ekl::ReduceOp>(isInAssoc);
     target.addDynamicallyLegalOp<ekl::SubscriptOp>(isInAssoc);
@@ -590,10 +628,13 @@ void messner::populateConvertEKLToLinalgPatterns(
     patterns.add<
         ConvertZip,
         ConvertChoice,
+        ConvertStack,
         ConvertAssoc,
         ConvertReduce,
         ConvertSubscript,
         ConvertWrite>(typeConverter, patterns.getContext());
+
+    tensor::populateDecomposeTensorConcatPatterns(patterns);
 }
 
 std::unique_ptr<Pass> messner::createConvertEKLToLinalgPass()

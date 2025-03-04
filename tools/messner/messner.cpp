@@ -158,10 +158,12 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
     passManager.addPass(messner::createConvertEKLToFuncPass());
     passManager.addPass(messner::createConvertEKLToLinalgPass());
     passManager.addPass(messner::createConvertEKLToStandardPass());
-    // -cse -canonicalize -reconcile-unrealized-casts
+    // -reconcile-unrealized-casts -cse -canonicalize
+    passManager.addPass(createReconcileUnrealizedCastsPass());
     passManager.addPass(createCSEPass());
     passManager.addPass(createCanonicalizerPass());
-    passManager.addPass(createReconcileUnrealizedCastsPass());
+    // -eliminate-empty-tensors
+    passManager.addPass(bufferization::createEmptyTensorEliminationPass());
     // -one-shot-bufferize
     passManager.addPass(bufferization::createOneShotBufferizePass());
     // Magic copy elision fix.
@@ -181,12 +183,14 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
     // -convert-func-to-llvm="use-bare-ptr-memref-call-conv=1"
     ConvertFuncToLLVMPassOptions funcToLLVMOptions{true, 64};
     passManager.addPass(createConvertFuncToLLVMPass(funcToLLVMOptions));
-    // -cse -canonicalize -reconcile-unrealized-casts
+    // -reconcile-unrealized-casts -cse -canonicalize
+    passManager.addPass(createReconcileUnrealizedCastsPass());
     passManager.addPass(createCSEPass());
     passManager.addPass(createCanonicalizerPass());
-    passManager.addPass(createReconcileUnrealizedCastsPass());
     // -convert-to-llvm
     passManager.addPass(createConvertToLLVMPass());
+    // -reconcile-unrealized-casts
+    passManager.addPass(createReconcileUnrealizedCastsPass());
 
     // Run the pass manager on the module.
     if (failed(passManager.run(result->getOperation()))) return {};
