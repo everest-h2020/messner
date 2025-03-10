@@ -4,14 +4,17 @@
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
 
 #include "messner/Target/EKL/Import.h"
-#include "messner/Dialect/EKL/Transforms/TypeCheck.h"
 
 #include "Lexer.hpp"
 #include "ParseDriver.h"
 #include "Parser.hpp"
+#include "messner/Dialect/EKL/Interfaces/TypeCheckOpInterface.h"
 #include "messner/Dialect/EKL/Transforms/Passes.h"
+#include "messner/Dialect/EKL/Transforms/TypeCheck.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
+
+#include <mlir/IR/Visitors.h>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -45,6 +48,39 @@ OwningOpRef<ProgramOp> mlir::ekl::importAndTypeCheck(
     if (!result) return {};
 
     if (failed(verify(*result)) || failed(typeCheck(*result))) {
+        result.release();
+        return {};
+    }
+
+    const auto isFullyTyped = [](Operation *op) -> WalkResult {
+        const auto iface = llvm::dyn_cast<TypeCheckOpInterface>(op);
+        if (!iface) return WalkResult::advance();
+
+        for (auto &region : iface->getRegions()) {
+            for (auto arg : region.getArguments()) {
+                const auto exprTy =
+                    llvm::dyn_cast<ExpressionType>(arg.getType());
+                if (!exprTy || exprTy.getTypeBound()) continue;
+                auto diag = iface->emitOpError("region #");
+                diag << region.getRegionNumber()
+                     << " could not infer type of argument #"
+                     << arg.getArgNumber();
+                diag.attachNote(arg.getLoc()) << "declared here";
+                return WalkResult::interrupt();
+            }
+        }
+
+        for (auto op : iface->getResults()) {
+            const auto exprTy = llvm::dyn_cast<ExpressionType>(op.getType());
+            if (!exprTy || exprTy.getTypeBound()) continue;
+            iface->emitOpError("could not infer type of result #")
+                << op.getResultNumber();
+            return WalkResult::interrupt();
+        }
+
+        return WalkResult::advance();
+    };
+    if (result->walk<WalkOrder::PostOrder>(isFullyTyped).wasInterrupted()) {
         result.release();
         return {};
     }
