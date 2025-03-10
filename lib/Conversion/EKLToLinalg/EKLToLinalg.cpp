@@ -76,6 +76,53 @@ struct ConvertEKLToLinalgPass
     void runOnOperation() override;
 };
 
+struct ConvertLiteral : OpConversionPattern<ekl::LiteralOp> {
+    using OpConversionPattern<ekl::LiteralOp>::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(
+        ekl::LiteralOp op,
+        ekl::LiteralOp::Adaptor,
+        ConversionPatternRewriter &rewriter) const final
+    {
+        const auto outTy = llvm::dyn_cast<RankedTensorType>(
+            getTypeConverter()->convertType(op.getType()));
+        if (!outTy) return failure();
+
+        DenseElementsAttr dense;
+        const auto value = llvm::cast<ekl::ArrayAttr>(op.getValue());
+        if (const auto splat = value.getSplatValue()) {
+            dense = DenseElementsAttr::get(outTy, splat);
+        } else {
+            // TODO: Implement.
+            return failure();
+        }
+
+        rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, dense);
+        return success();
+    }
+};
+
+struct ConvertUnify : OpConversionPattern<ekl::UnifyOp> {
+    using OpConversionPattern<ekl::UnifyOp>::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(
+        ekl::UnifyOp op,
+        ekl::UnifyOp::Adaptor adaptor,
+        ConversionPatternRewriter &rewriter) const final
+    {
+        const auto outTy = llvm::dyn_cast<RankedTensorType>(
+            getTypeConverter()->convertType(op.getType()));
+        if (!outTy || adaptor.getOperand().getType() != outTy.getElementType())
+            return failure();
+
+        rewriter.replaceOpWithNewOp<tensor::FromElementsOp>(
+            op,
+            outTy,
+            adaptor.getOperand());
+        return success();
+    }
+};
+
 struct ConvertZip : OpConversionPattern<ekl::ZipOp> {
     using OpConversionPattern<ekl::ZipOp>::OpConversionPattern;
 
@@ -179,9 +226,12 @@ struct ConvertStack : OpConversionPattern<ekl::StackOp> {
         const auto inTy =
             RankedTensorType::get(inShape, tensorTy.getElementType());
         SmallVector<ReassociationIndices> inReassoc;
-        for (auto i : llvm::iota_range<int64_t>(1, inShape.size(), false))
-            inReassoc.emplace_back().push_back(i);
-        inReassoc.front().insert(inReassoc.front().begin(), 0);
+
+        if (inShape.size() > 1) {
+            for (auto i : llvm::iota_range<int64_t>(1, inShape.size(), false))
+                inReassoc.emplace_back().push_back(i);
+            inReassoc.front().insert(inReassoc.front().begin(), 0);
+        }
 
         SmallVector<Value> ins;
         for (auto in : adaptor.getOperands())
@@ -415,6 +465,9 @@ private:
     LogicalResult
     generate(ekl::AssocOp op, ConversionPatternRewriter &rewriter) const
     {
+        if (!llvm::isa<ScalarType>(getTypeBound(op.getMapExpression())))
+            return failure();
+
         const auto tensorTy = llvm::cast<RankedTensorType>(
             getTypeConverter()->convertType(op.getType()));
         auto generate = rewriter.create<tensor::GenerateOp>(
@@ -598,6 +651,14 @@ void ConvertEKLToLinalgPass::runOnOperation()
         return op->getParentOfType<ekl::AssocOp>();
     };
 
+    target.addDynamicallyLegalOp<ekl::LiteralOp>([](ekl::LiteralOp op) {
+        return !llvm::isa_and_present<ArrayType>(getTypeBound(op.getType()));
+    });
+    target.addDynamicallyLegalOp<ekl::UnifyOp>([](ekl::UnifyOp op) {
+        return !llvm::isa_and_present<ArrayType>(getTypeBound(op.getType()))
+            || !llvm::isa_and_present<ScalarType>(
+                getTypeBound(op.getOperand()));
+    });
     target.addIllegalOp<ekl::ZipOp>();
     target.addIllegalOp<ekl::ChoiceOp>();
     target.addIllegalOp<ekl::StackOp>();
@@ -626,6 +687,8 @@ void messner::populateConvertEKLToLinalgPatterns(
     RewritePatternSet &patterns)
 {
     patterns.add<
+        ConvertLiteral,
+        ConvertUnify,
         ConvertZip,
         ConvertChoice,
         ConvertStack,

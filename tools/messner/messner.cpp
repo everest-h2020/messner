@@ -162,6 +162,9 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
     passManager.addPass(createReconcileUnrealizedCastsPass());
     passManager.addPass(createCSEPass());
     passManager.addPass(createCanonicalizerPass());
+    // -ekl-to-std -reconcile-unrealized-casts
+    passManager.addPass(messner::createConvertEKLToStandardPass());
+    passManager.addPass(createReconcileUnrealizedCastsPass());
     // -eliminate-empty-tensors
     passManager.addPass(bufferization::createEmptyTensorEliminationPass());
     // -one-shot-bufferize

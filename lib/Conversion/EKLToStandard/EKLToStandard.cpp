@@ -500,7 +500,9 @@ struct ConvertNegate : OpConversionPattern<ekl::NegateOp> {
                 adaptor.getOperand());
             return success();
         } else if (llvm::isa<FloatType>(inTy)) {
-            rewriter.replaceOpWithNewOp<math::PowFOp>(op, adaptor.getOperand());
+            rewriter.replaceOpWithNewOp<arith::NegFOp>(
+                op,
+                adaptor.getOperand());
             return success();
         }
 

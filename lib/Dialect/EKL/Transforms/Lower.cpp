@@ -14,6 +14,8 @@
 
 #include "llvm/Support/Debug.h"
 
+#include <llvm/Support/Casting.h>
+
 using namespace mlir;
 using namespace mlir::ekl;
 
@@ -412,6 +414,39 @@ struct CollapseAssoc : OpRewritePattern<AssocOp> {
     }
 };
 
+struct ReindexAssoc : OpRewritePattern<AssocOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(AssocOp op, PatternRewriter &rewriter) const final
+    {
+        auto yieldTy = llvm::dyn_cast_if_present<ArrayType>(
+            getTypeBound(op.getMapExpression()));
+        if (!yieldTy) return failure();
+
+        SmallVector<Value> indices;
+        auto yield = llvm::cast<YieldOp>(&op.getMap()->back());
+        for (auto ext : yieldTy.getExtents()) {
+            const auto indexTy =
+                ekl::IndexType::get(rewriter.getContext(), ext - 1UL);
+            indices.push_back(op.getMap()->addArgument(
+                ExpressionType::get(rewriter.getContext(), indexTy),
+                yield->getLoc()));
+        }
+
+        rewriter.setInsertionPoint(yield);
+        const auto scalar = rewriter
+                                .create<SubscriptOp>(
+                                    yield.getLoc(),
+                                    yield.getOperand(),
+                                    indices,
+                                    yieldTy.getScalarType())
+                                .getResult();
+        rewriter.modifyOpInPlace(yield, [&]() { yield.setOperand(scalar); });
+        return success();
+    }
+};
+
 } // namespace
 
 void mlir::ekl::populateLowerPatterns(RewritePatternSet &patterns)
@@ -428,7 +463,7 @@ void mlir::ekl::populateLowerPatterns(RewritePatternSet &patterns)
 
     patterns.add<DissolveZip, RewriteZipToAssoc>(patterns.getContext());
 
-    patterns.add<CollapseAssoc>(patterns.getContext());
+    patterns.add<CollapseAssoc, ReindexAssoc>(patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
