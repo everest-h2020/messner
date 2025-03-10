@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <llvm/Support/Casting.h>
 #include <mlir/IR/OpDefinition.h>
 
 using namespace mlir;
@@ -1037,26 +1038,11 @@ LogicalResult SubscriptOp::typeCheck(AbstractTypeChecker &typeChecker)
     SmallVector<uint64_t> extents;
     for (auto [idx, value] : llvm::enumerate(getSubscripts())) {
         auto bound = subscriptTys[idx];
-        if (!bound) {
-            const auto index = getInferrableIndex(value);
-            assert(index);
-
-            // The subscript type checker let this through because it can be
-            // inferred from the array extents here.
-            const auto meet = meetIndexBound(
-                typeChecker,
-                index,
-                arrayTy.getExtent(sourceDim) - 1UL);
-            if (failed(meet)) return failure();
-            bound = *meet;
-            assert(bound);
-        }
-        if (llvm::isa<ExtentType>(bound)) {
+        if (llvm::isa_and_present<ExtentType>(bound)) {
             // Insert a new unit dimension.
             extents.push_back(1UL);
             continue;
-        }
-        if (llvm::isa<EllipsisType>(bound)) {
+        } else if (llvm::isa_and_present<EllipsisType>(bound)) {
             // Count the number of remaining subscripts that will bind to a
             // source dimension.
             const auto remaining = static_cast<size_t>(llvm::count_if(
@@ -1077,7 +1063,21 @@ LogicalResult SubscriptOp::typeCheck(AbstractTypeChecker &typeChecker)
             diag.attachNote(value.getLoc()) << "with this subscript";
             return diag;
         }
-        if (llvm::isa<IdentityType>(bound)) {
+
+        if (!bound) {
+            const auto index = getInferrableIndex(value);
+            assert(index);
+
+            // The subscript type checker let this through because it can be
+            // inferred from the array extents here.
+            const auto meet = meetIndexBound(
+                typeChecker,
+                index,
+                arrayTy.getExtent(sourceDim) - 1UL);
+            if (failed(meet)) return failure();
+            bound = *meet;
+            assert(bound);
+        } else if (llvm::isa<IdentityType>(bound)) {
             // Map this dimension using the identity.
             extents.push_back(arrayTy.getExtent(sourceDim++));
             continue;
