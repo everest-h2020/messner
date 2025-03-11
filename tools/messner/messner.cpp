@@ -8,41 +8,46 @@
 #include "messner/Conversion/EKLToStandard/EKLToStandard.h"
 #include "messner/Dialect/EKL/IR/EKL.h"
 #include "messner/Target/EKL/Import.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/ExecutionEngine/ExecutionEngine.h"
-#include "mlir/ExecutionEngine/OptUtils.h"
-#include "mlir/IR/AsmState.h"
-#include "mlir/IR/Dialect.h"
-#include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/Verifier.h"
-#include "mlir/InitAllDialects.h"
-#include "mlir/InitAllExtensions.h"
-#include "mlir/InitAllPasses.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
-#include "mlir/Support/FileUtilities.h"
-#include "mlir/Target/LLVMIR/Export.h"
-#include "mlir/Tools/mlir-opt/MlirOptMain.h"
-
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/InitLLVM.h"
-#include "llvm/Support/Process.h"
-#include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/ToolOutputFile.h"
 
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/PassManager.h>
+#include <llvm/Support/CodeGen.h>
+#include <llvm/Support/CommandLine.h>
+#include <llvm/Support/InitLLVM.h>
+#include <llvm/Support/Process.h>
+#include <llvm/Support/SourceMgr.h>
+#include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/ToolOutputFile.h>
+#include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h>
 #include <mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h>
 #include <mlir/Dialect/Bufferization/IR/Bufferization.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
+#include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/Linalg/IR/Linalg.h>
 #include <mlir/Dialect/Linalg/Passes.h>
+#include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
+#include <mlir/ExecutionEngine/ExecutionEngine.h>
+#include <mlir/ExecutionEngine/OptUtils.h>
+#include <mlir/IR/AsmState.h>
+#include <mlir/IR/Dialect.h>
+#include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/PatternMatch.h>
+#include <mlir/IR/Verifier.h>
 #include <mlir/IR/Visitors.h>
+#include <mlir/InitAllDialects.h>
+#include <mlir/InitAllExtensions.h>
+#include <mlir/InitAllPasses.h>
+#include <mlir/Pass/Pass.h>
+#include <mlir/Pass/PassManager.h>
+#include <mlir/Support/FileUtilities.h>
+#include <mlir/Target/LLVMIR/Export.h>
+#include <mlir/Tools/mlir-opt/MlirOptMain.h>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -129,6 +134,28 @@ static llvm::cl::opt<std::string> outputFilename(
     llvm::cl::value_desc("filename"),
     llvm::cl::init("-"));
 
+enum class OutputStage {
+    TypeChecked,
+    Implemented,
+    Lowered,
+    Buffered,
+    Compiled,
+    Assembled
+};
+
+// clang-format off
+static llvm::cl::opt<OutputStage> outputStage(
+    llvm::cl::desc("Choose output stage:"),
+    llvm::cl::values(
+        clEnumValN(OutputStage::TypeChecked, "type",   "Only import and type check"),
+        clEnumValN(OutputStage::Implemented, "impl",   "Implement within EKL"),
+        clEnumValN(OutputStage::Lowered,     "lower",  "Lower to standard dialects"),
+        clEnumValN(OutputStage::Buffered,    "buffer", "Bufferize tensor operations"),
+        clEnumValN(OutputStage::Compiled,    "S",      "Output LLVM assembly"),
+        clEnumValN(OutputStage::Assembled,   "c",      "Output object file")),
+    llvm::cl::init(OutputStage::Assembled));
+// clang-format on
+
 OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
 {
     // Create the result ModuleOp and put the program in it.
@@ -143,69 +170,80 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
         PassManager::Nesting::Implicit);
     if (failed(applyPassManagerCLOptions(passManager))) return {};
 
-    auto &program = passManager.nest<ProgramOp>();
-    auto &kernel  = program.nest<KernelOp>();
-    // -ekl-lower -ekl-decay-number -ekl-homogenize -ekl-implement
-    kernel.addPass(createLowerPass());
-    kernel.addPass(createDecayNumberPass());
-    kernel.addPass(createHomogenizePass());
-    kernel.addPass(createImplementPass());
-    // -cse -canonicalize
-    kernel.addPass(createCSEPass());
-    kernel.addPass(createCanonicalizerPass());
+    if (outputStage >= OutputStage::Implemented) {
+        auto &program = passManager.nest<ProgramOp>();
+        auto &kernel  = program.nest<KernelOp>();
+        // -ekl-lower -ekl-decay-number -ekl-homogenize -ekl-implement
+        kernel.addPass(createLowerPass());
+        kernel.addPass(createDecayNumberPass());
+        kernel.addPass(createHomogenizePass());
+        kernel.addPass(createImplementPass());
+        // -cse -canonicalize
+        kernel.addPass(createCSEPass());
+        kernel.addPass(createCanonicalizerPass());
+    }
 
-    // -ekl-to-func -ekl-to-linalg -ekl-to-std
-    passManager.addPass(messner::createConvertEKLToFuncPass());
-    passManager.addPass(messner::createConvertEKLToLinalgPass());
-    passManager.addPass(messner::createConvertEKLToStandardPass());
-    // -reconcile-unrealized-casts -cse -canonicalize
-    passManager.addPass(createReconcileUnrealizedCastsPass());
-    passManager.addPass(createCSEPass());
-    passManager.addPass(createCanonicalizerPass());
-    // -ekl-to-std -reconcile-unrealized-casts
-    passManager.addPass(messner::createConvertEKLToStandardPass());
-    passManager.addPass(createReconcileUnrealizedCastsPass());
-    // -eliminate-empty-tensors
-    passManager.addPass(bufferization::createEmptyTensorEliminationPass());
-    // -one-shot-bufferize
-    passManager.addPass(bufferization::createOneShotBufferizePass());
-    // Magic copy elision fix.
-    passManager.addPass(std::make_unique<CopyElisionPass>());
-    // -convert-linalg-to-loops
-    passManager.addPass(createConvertLinalgToLoopsPass());
-    // -buffer-loop-hoisting -buffer-hoosting -buffer-deallocation
-    passManager.addPass(bufferization::createBufferLoopHoistingPass());
-    passManager.addPass(bufferization::createBufferHoistingPass());
-    passManager.addPass(bufferization::createBufferDeallocationPass());
-    // -expand-strided-metadata -finalize-memref-to-llvm -lower-affine
-    passManager.addPass(memref::createExpandStridedMetadataPass());
-    passManager.addPass(createFinalizeMemRefToLLVMConversionPass());
-    passManager.addPass(createLowerAffinePass());
-    // -convert-scf-to-cf
-    passManager.addPass(createConvertSCFToCFPass());
-    // -convert-func-to-llvm="use-bare-ptr-memref-call-conv=1"
-    ConvertFuncToLLVMPassOptions funcToLLVMOptions{true, 64};
-    passManager.addPass(createConvertFuncToLLVMPass(funcToLLVMOptions));
-    // -reconcile-unrealized-casts -cse -canonicalize
-    passManager.addPass(createReconcileUnrealizedCastsPass());
-    passManager.addPass(createCSEPass());
-    passManager.addPass(createCanonicalizerPass());
-    // -convert-to-llvm
-    passManager.addPass(createConvertToLLVMPass());
-    // -reconcile-unrealized-casts
-    passManager.addPass(createReconcileUnrealizedCastsPass());
+    if (outputStage >= OutputStage::Lowered) {
+        // -ekl-to-func -ekl-to-linalg -ekl-to-std
+        passManager.addPass(messner::createConvertEKLToFuncPass());
+        passManager.addPass(messner::createConvertEKLToLinalgPass());
+        passManager.addPass(messner::createConvertEKLToStandardPass());
+        // -reconcile-unrealized-casts -cse -canonicalize
+        passManager.addPass(createReconcileUnrealizedCastsPass());
+        passManager.addPass(createCSEPass());
+        passManager.addPass(createCanonicalizerPass());
+        // -ekl-to-std -reconcile-unrealized-casts
+        passManager.addPass(messner::createConvertEKLToStandardPass());
+        passManager.addPass(createReconcileUnrealizedCastsPass());
+    }
+
+    if (outputStage >= OutputStage::Buffered) {
+        // -eliminate-empty-tensors
+        passManager.addPass(bufferization::createEmptyTensorEliminationPass());
+        // -one-shot-bufferize
+        passManager.addPass(bufferization::createOneShotBufferizePass());
+        // Magic copy elision fix.
+        passManager.addPass(std::make_unique<CopyElisionPass>());
+    }
+
+    if (outputStage >= OutputStage::Compiled) {
+        // -convert-linalg-to-loops
+        passManager.addPass(createConvertLinalgToLoopsPass());
+        // -buffer-loop-hoisting -buffer-hoosting -buffer-deallocation
+        passManager.addPass(bufferization::createBufferLoopHoistingPass());
+        passManager.addPass(bufferization::createBufferHoistingPass());
+        passManager.addPass(bufferization::createBufferDeallocationPass());
+        // -expand-strided-metadata -finalize-memref-to-llvm -lower-affine
+        passManager.addPass(memref::createExpandStridedMetadataPass());
+        passManager.addPass(createFinalizeMemRefToLLVMConversionPass());
+        passManager.addPass(createLowerAffinePass());
+        // -convert-scf-to-cf
+        passManager.addPass(createConvertSCFToCFPass());
+        // -convert-func-to-llvm="use-bare-ptr-memref-call-conv=1"
+        ConvertFuncToLLVMPassOptions funcToLLVMOptions{true, 64};
+        passManager.addPass(createConvertFuncToLLVMPass(funcToLLVMOptions));
+        // -reconcile-unrealized-casts -cse -canonicalize
+        passManager.addPass(createReconcileUnrealizedCastsPass());
+        passManager.addPass(createCSEPass());
+        passManager.addPass(createCanonicalizerPass());
+        // -convert-to-llvm
+        passManager.addPass(createConvertToLLVMPass());
+        // -reconcile-unrealized-casts
+        passManager.addPass(createReconcileUnrealizedCastsPass());
+    }
 
     // Run the pass manager on the module.
     if (failed(passManager.run(result->getOperation()))) return {};
     // Verify the result before proceeding.
     if (failed(verify(*result))) return {};
+
     return result;
 }
 
 LogicalResult runOnInput(
     const DialectRegistry &registry,
     std::unique_ptr<llvm::MemoryBuffer> input,
-    llvm::raw_ostream &output)
+    llvm::raw_fd_ostream &output)
 {
     // Create and set up the llvm::SourceMgr.
     auto sourceMgr = std::make_shared<llvm::SourceMgr>();
@@ -226,6 +264,13 @@ LogicalResult runOnInput(
     // Run the pass pipeline to produce the result module.
     auto module = runOnInput(std::move(program));
     if (!module) return failure();
+
+    if (outputStage < OutputStage::Compiled) {
+        // Print the MLIR.
+        mlir::AsmState state(*module);
+        module->print(output, state);
+        return success();
+    }
 
     // Translate to LLVMIR.
     mlir::registerBuiltinDialectTranslation(*module->getContext());
@@ -255,8 +300,24 @@ LogicalResult runOnInput(
         /*targetMachine=*/nullptr);
     if (auto err = optPipeline(llvmModule.get())) return failure();
 
-    // Print the LLVMIR.
-    llvmModule->print(output, nullptr);
+    if (outputStage < OutputStage::Assembled) {
+        // Print the LLVMIR.
+        llvmModule->print(output, nullptr);
+        return success();
+    }
+
+    // Run the assembler.
+    llvm::legacy::PassManager pm;
+    const auto fail = tmOrError.get()->addPassesToEmitFile(
+        pm,
+        output,
+        nullptr,
+        llvm::CodeGenFileType::ObjectFile);
+    if (fail) {
+        llvm::errs() << "can't assemble object file\n";
+        return failure();
+    }
+    pm.run(*llvmModule);
     return success();
 }
 
