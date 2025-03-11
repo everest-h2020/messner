@@ -22,6 +22,7 @@
 #include <llvm/Support/ToolOutputFile.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
+#include <llvm/Target/TargetOptions.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h>
 #include <mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h>
 #include <mlir/Dialect/Bufferization/IR/Bufferization.h>
@@ -289,6 +290,7 @@ LogicalResult runOnInput(
     llvm::InitializeNativeTargetAsmPrinter();
     auto tmBuilderOrError = llvm::orc::JITTargetMachineBuilder::detectHost();
     if (!tmBuilderOrError) return failure();
+    tmBuilderOrError->setRelocationModel(llvm::Reloc::PIC_);
     auto tmOrError = tmBuilderOrError->createTargetMachine();
     if (!tmOrError) return failure();
     mlir::ExecutionEngine::setupTargetTripleAndDataLayout(
