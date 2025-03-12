@@ -24,6 +24,11 @@ target_link_libraries(${PROJECT_NAME}
         MLIRPluginsLib
         MLIRSupport
         MLIROptLib
+        LLVMOrcJIT
+        LLVMX86Info
+        LLVMX86Desc
+        LLVMX86CodeGen
+        LLVMX86TargetMCA
         ${dialect_libs}
         ${conversion_libs}
         ${extension_libs}
