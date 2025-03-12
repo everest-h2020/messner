@@ -6,6 +6,7 @@
 #include "messner/Dialect/EKL/IR/EKL.h"
 #include "messner/Dialect/EKL/IR/Ops.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -14,7 +15,11 @@
 
 #include "llvm/Support/Debug.h"
 
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/Support/Casting.h>
+#include <mlir/IR/IRMapping.h>
+#include <mlir/IR/OperationSupport.h>
+#include <utility>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -447,6 +452,50 @@ struct ReindexAssoc : OpRewritePattern<AssocOp> {
     }
 };
 
+struct CollapseReduction : OpRewritePattern<ReduceOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(ReduceOp op, PatternRewriter &rewriter) const final
+    {
+        auto source = op.getArray().getDefiningOp<AssocOp>();
+        if (!source) return failure();
+        auto inner = source.getMapExpression().getDefiningOp<ReduceOp>();
+        if (!inner) return failure();
+        if (!areCompatible(op, inner)) return failure();
+
+        const auto sourceTy =
+            llvm::cast<ArrayType>(getTypeBound(source.getType()));
+        const auto innerTy =
+            llvm::cast<ArrayType>(getTypeBound(inner.getArray()));
+        assert(sourceTy.getScalarType() == innerTy.getScalarType());
+
+        const auto collapsedTy = ArrayType::get(
+            sourceTy.getScalarType(),
+            concat(sourceTy.getExtents(), innerTy.getExtents()));
+
+        const auto yield = &source.getMap()->back();
+        rewriter.modifyOpInPlace(yield, [&]() {
+            yield->setOperand(0, inner.getArray());
+        });
+        rewriter.modifyOpInPlace(source, [&]() {
+            source.getResult().setType(
+                ExpressionType::get(getContext(), collapsedTy));
+        });
+        rewriter.eraseOp(inner);
+        return success();
+    }
+
+private:
+    static bool areCompatible(ReduceOp outer, ReduceOp inner)
+    {
+        return OperationEquivalence::isRegionEquivalentTo(
+            &outer.getReductionRegion(),
+            &inner.getReductionRegion(),
+            OperationEquivalence::Flags::IgnoreLocations);
+    }
+};
+
 } // namespace
 
 void mlir::ekl::populateLowerPatterns(RewritePatternSet &patterns)
@@ -464,6 +513,8 @@ void mlir::ekl::populateLowerPatterns(RewritePatternSet &patterns)
     patterns.add<DissolveZip, RewriteZipToAssoc>(patterns.getContext());
 
     patterns.add<CollapseAssoc, ReindexAssoc>(patterns.getContext());
+
+    patterns.add<CollapseReduction>(patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
@@ -476,7 +527,7 @@ void LowerPass::runOnOperation()
 
     populateLowerPatterns(patterns);
 
-    if (failed(applyPatternsAndFoldGreedily(
+    if (failed(applyPatternsGreedily(
             getOperation(),
             FrozenRewritePatternSet(std::move(patterns)))))
         signalPassFailure();
