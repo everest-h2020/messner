@@ -498,10 +498,15 @@ private:
 
 } // namespace
 
-void mlir::ekl::populateLowerPatterns(RewritePatternSet &patterns)
+void mlir::ekl::populateHoistPatterns(RewritePatternSet &patterns)
 {
     // Hoisting applies to all functors and is essential for other rewrites.
     patterns.add<Hoist>(patterns.getContext());
+}
+
+void mlir::ekl::populateLowerPatterns(RewritePatternSet &patterns)
+{
+    populateHoistPatterns(patterns);
 
     patterns
         .add<EliminateIf, DissolveIf, RewriteIfToStatement, RewriteIfToChoice>(

@@ -38,6 +38,11 @@ void populateHomogenizePatterns(RewritePatternSet &patterns);
 /// Constructs the ekl-homogenize pass.
 std::unique_ptr<Pass> createHomogenizePass();
 
+/// Adds the functor hoisting patterns to @p patterns .
+///
+/// @param  [in,out]    patterns    RewritePatternSet.
+void populateHoistPatterns(RewritePatternSet &patterns);
+
 /// Adds the ekl-lower patterns to @p patterns .
 ///
 /// @param  [in,out]    patterns    RewritePatternSet.

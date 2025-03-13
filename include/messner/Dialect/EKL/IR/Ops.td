@@ -650,7 +650,7 @@ def EKL_GetStaticOp : EKL_ExpressionBase<
 
 def EKL_SubscriptOp : EKL_ExpressionBase<
         "subscript",
-        [DeclareOpInterfaceMethods<ConditionallySpeculatable>]> {
+        [NoMemoryEffect, DeclareOpInterfaceMethods<ConditionallySpeculatable>]> {
     let summary = "Subscript operator";
     let description = [{
         The `ekl.subscript` operator derives a value from an input array using
