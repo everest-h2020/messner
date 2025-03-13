@@ -23,7 +23,10 @@
 
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/Sequence.h>
+#include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/LogicalResult.h>
+#include <mlir/IR/OpDefinition.h>
+#include <mlir/IR/Visitors.h>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -118,99 +121,214 @@ struct SplitReduction : OpRewritePattern<ReduceOp> {
     }
 };
 
-// struct FactorizeReduction : OpRewritePattern<ReduceOp> {
-//     using OpRewritePattern::OpRewritePattern;
+struct Factorizer {
+    explicit Factorizer(PatternRewriter &rewriter, AssocOp op)
+            : m_rewriter(rewriter),
+              m_op(op),
+              m_liftable()
+    {
+        assert(op);
+    }
 
-//     LogicalResult
-//     matchAndRewrite(ReduceOp op, PatternRewriter &rewriter) const final
-//     {
-//         // 1. Find a reduction (op) "add l, r" of an assoc (source) with >1
-//         //    dims.
-//         auto add = op.getReductionExpression().getDefiningOp<AddOp>();
-//         if (!add
-//             || !llvm::equal(
-//                 add->getOperands(),
-//                 op.getReduction()->getArguments()))
-//             return failure();
-//         auto source = op.getArray().getDefiningOp<AssocOp>();
-//         if (!source) return failure();
+    LogicalResult factorize()
+    {
+        auto definition = m_op.getMapExpression().getDefiningOp();
+        if (!definition) return failure();
 
-//         auto dims = source.getMap()->getNumArguments();
+        auto maybeFactor = visit(definition);
+        if (failed(maybeFactor)) return failure();
 
-//         while (dims > 1)
-//             if (succeeded(factorizeDim(source, --dims, rewriter)))
-//                 return success();
+        m_op.getMap()->back().setOperand(0, maybeFactor->getLhs());
+        m_rewriter.setInsertionPointAfter(m_op);
 
-//         return failure();
-//     }
+        auto lifted   = lift(maybeFactor->getRhs());
+        auto factored = m_rewriter.create<MultiplyOp>(
+            m_op.getLoc(),
+            m_op.getResult(),
+            lifted,
+            getTypeBound(m_op.getType()));
+        m_rewriter.replaceAllUsesExcept(m_op.getResult(), factored, factored);
+        return success();
+    }
 
-// private:
-//     LogicalResult
-//     factorizeDim(AssocOp source, unsigned dim, PatternRewriter &rewriter)
-//     const
-//     {
-//         const auto index = source.getMap()->getArgument(dim);
+private:
+    bool isLiftable(Value value)
+    {
+        assert(value);
 
-//         // 2. Find a dim that may be factorized:
-//         //  a) There must be subscript expressions that the dim is not
-//         involved
-//         //     in.
-//         SmallVector<SubscriptOp> involved;
-//         SmallVector<SubscriptOp> uninvolved;
-//         for (auto subscript : source.getOps<SubscriptOp>()) {
-//             if (llvm::count(subscript.getSubscripts(), index)) {
-//                 involved.push_back(subscript);
-//                 continue;
-//             }
+        auto [it, compute] = m_liftable.try_emplace(value, false);
+        if (!compute) return it->second;
 
-//             uninvolved.push_back(subscript);
-//         }
-//         if (uninvolved.empty()) return failure();
+        return m_liftable.insert_or_assign(value, isLiftableImpl(value))
+            .first->second;
+    }
+    bool isLiftable(Operation *op)
+    {
+        assert(op);
 
-//         //  b) The yield expression must be rearranged to "mul %involved,
-//         //     %uninvolved"
-//         // FIXME: For now, it must just be a mul tree.
-//         if (failed(matchMulTree(source.getMapExpression()))) return
-//         failure();
+        auto walk = op->walk([&](Operation *op) -> WalkResult {
+            if (!isMemoryEffectFree(op) || !isSpeculatable(op))
+                return WalkResult::interrupt();
 
-//         // 3. Factorize that dim:
-//         //  a) Create an assoc (partial) before source with %involved
-//         subscript
-//         //     dims.
+            if (llvm::any_of(op->getOperands(), [&](Value value) {
+                    return !isLiftable(value);
+                }))
+                return WalkResult::interrupt();
 
-//         rewriter.setInsertionPoint(source);
+            if (op->hasTrait<mlir::OpTrait::IsIsolatedFromAbove>())
+                return WalkResult::skip();
+            return WalkResult::advance();
+        });
 
-//         auto partial =
-//             rewriter.create<AssocOp>(source.getLoc(), ArrayType::get());
+        return !walk.wasInterrupted();
+    }
+    bool isLiftableImpl(Value value)
+    {
+        assert(value);
 
-//         //  b) Move the %involved (op) map expressions to it (partial).
-//         //  c) Create a reduction (lifted) on the assoc (partial), cloning
-//         from
-//         //     (op).
-//         //  d) Replace %involved with a subscript to the reduction
-//         //     (lifted).
-//         //  e) Remove the dim from the old assoc (source).
+        if (value.getParentRegion()->isProperAncestor(&m_op.getMapRegion()))
+            return true;
 
-//         return failure();
-//     }
+        auto definition = value.getDefiningOp();
+        if (!definition) return false;
+        return isLiftable(definition);
+    }
 
-//     LogicalResult matchMulTree(Value yieldExpr) const
-//     {
-//         DenseSet<Value> seen{};
-//         const auto match = [&](auto &self, Value expr) -> LogicalResult {
-//             if (!seen.insert(expr).second) return failure();
-//             if (auto subscript = expr.getDefiningOp<SubscriptOp>())
-//                 return success();
+    FailureOr<MultiplyOp> visit(Operation *op)
+    {
+        assert(op);
 
-//             auto mul = expr.getDefiningOp<MultiplyOp>();
-//             if (!mul) return failure();
-//             return success(
-//                 succeeded(self(self, mul.getLhs()))
-//                 && succeeded(self(self, mul.getRhs())));
-//         };
-//         return match(match, yieldExpr);
-//     }
-// };
+        return llvm::TypeSwitch<Operation *, FailureOr<MultiplyOp>>(op)
+            .Case([&](AddOp add) { return visit(add); })
+            .Case([&](MultiplyOp multiply) { return visit(multiply); })
+            .Default([](auto) -> FailureOr<MultiplyOp> { return failure(); });
+    }
+    FailureOr<MultiplyOp> visit(AddOp op)
+    {
+        assert(op);
+
+        auto lhs = op.getLhs().getDefiningOp<MultiplyOp>();
+        auto rhs = op.getRhs().getDefiningOp<MultiplyOp>();
+        if (!lhs || !rhs) return failure();
+
+        const auto factorize =
+            [&](Value factor, Value lhs, Value rhs) -> FailureOr<MultiplyOp> {
+            m_rewriter.setInsertionPoint(op);
+            const auto scalarTy = getTypeBound(op.getType());
+            auto add =
+                m_rewriter.create<AddOp>(op.getLoc(), lhs, rhs, scalarTy);
+            auto mul = m_rewriter.create<MultiplyOp>(
+                op.getLoc(),
+                factor,
+                add.getResult(),
+                scalarTy);
+            return visit(mul);
+        };
+
+        if (lhs.getLhs() == rhs.getLhs())
+            return factorize(lhs.getLhs(), lhs.getRhs(), rhs.getRhs());
+        if (lhs.getLhs() == rhs.getRhs())
+            return factorize(lhs.getLhs(), lhs.getRhs(), rhs.getLhs());
+        if (lhs.getRhs() == rhs.getLhs())
+            return factorize(lhs.getRhs(), lhs.getLhs(), rhs.getRhs());
+        if (lhs.getRhs() == rhs.getRhs())
+            return factorize(lhs.getRhs(), lhs.getLhs(), rhs.getLhs());
+        return failure();
+    }
+    FailureOr<MultiplyOp> visit(MultiplyOp op)
+    {
+        assert(op);
+
+        if (isLiftable(op.getRhs())) return op;
+        if (auto rhs = op.getRhs().getDefiningOp()) {
+            auto maybeFactor = visit(rhs);
+            if (succeeded(maybeFactor)) {
+                op->setOperand(1, maybeFactor->getRhs());
+                maybeFactor->setOperand(1, op.getLhs());
+                op.setOperand(0, maybeFactor->getResult());
+                return op;
+            }
+        }
+        if (isLiftable(op.getLhs())) {
+            Value ops[2] = {op.getRhs(), op.getLhs()};
+            op->setOperands(ops);
+            return op;
+        }
+        if (auto lhs = op.getLhs().getDefiningOp()) {
+            auto maybeFactor = visit(lhs);
+            if (succeeded(maybeFactor)) {
+                auto factor = maybeFactor->getRhs();
+                maybeFactor->setOperand(1, op.getRhs());
+                op.setOperand(1, factor);
+                return op;
+            }
+        }
+
+        return failure();
+    }
+
+    Value lift(Value value)
+    {
+        if (value.getParentRegion()->isProperAncestor(&m_op.getMapRegion()))
+            return value;
+
+        auto definition = value.getDefiningOp();
+        assert(definition);
+
+        for (auto [i, op] : llvm::enumerate(definition->getOperands()))
+            definition->setOperand(i, lift(op));
+
+        m_rewriter.moveOpBefore(definition, m_op);
+        return value;
+    }
+
+    PatternRewriter &m_rewriter;
+    AssocOp m_op;
+    DenseMap<Value, bool> m_liftable;
+};
+
+struct LiftFactor : OpRewritePattern<AssocOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(AssocOp op, PatternRewriter &rewriter) const final
+    {
+        return Factorizer(rewriter, op).factorize();
+    }
+};
+
+struct DistributeFactor : OpRewritePattern<ReduceOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(ReduceOp op, PatternRewriter &rewriter) const final
+    {
+        auto mul = op.getArray().getDefiningOp<MultiplyOp>();
+        if (!mul) return failure();
+        if (llvm::isa<ScalarType>(getTypeBound(mul.getLhs()))) {
+            Value ops[2] = {mul.getLhs(), mul.getRhs()};
+            mul->setOperands(ops);
+        } else if (!llvm::isa<ScalarType>(getTypeBound(mul.getRhs())))
+            return failure();
+
+        auto add = op.getReductionExpression().getDefiningOp<AddOp>();
+        if (!add || add.getOperands() != op.getReduction()->getArguments())
+            return failure();
+
+        op.setOperand(0, mul.getLhs());
+        rewriter.setInsertionPointAfter(op);
+        auto postMul = rewriter.create<MultiplyOp>(
+            mul.getLoc(),
+            op.getResult(),
+            mul.getRhs(),
+            getTypeBound(op.getType()));
+        rewriter.replaceAllUsesExcept(
+            op.getResult(),
+            postMul.getResult(),
+            postMul);
+        return success();
+    }
+};
 
 } // namespace
 
@@ -220,7 +338,7 @@ void mlir::ekl::populateLiftPatterns(RewritePatternSet &patterns)
 
     patterns.add<SplitReduction>(patterns.getContext());
 
-    // patterns.add<FactorizeReduction>(patterns.getContext());
+    patterns.add<LiftFactor, DistributeFactor>(patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
