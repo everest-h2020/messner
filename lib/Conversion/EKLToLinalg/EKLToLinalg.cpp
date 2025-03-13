@@ -519,6 +519,9 @@ struct ConvertReduce : OpConversionPattern<ekl::ReduceOp> {
         ekl::ReduceOp::Adaptor adaptor,
         ConversionPatternRewriter &rewriter) const final
     {
+        const auto maybeNeutral = createNeutral(rewriter, op);
+        if (failed(maybeNeutral)) return failure();
+
         const auto inTy =
             llvm::cast<RankedTensorType>(adaptor.getArray().getType());
 
@@ -532,10 +535,10 @@ struct ConvertReduce : OpConversionPattern<ekl::ReduceOp> {
                                    .getResult();
 
         const auto init = rewriter
-                              .create<tensor::EmptyOp>(
+                              .create<tensor::SplatOp>(
                                   op.getLoc(),
-                                  ArrayRef<int64_t>{},
-                                  inTy.getElementType())
+                                  *maybeNeutral,
+                                  ArrayRef<int64_t>{})
                               .getResult();
 
         auto reduce = rewriter.create<linalg::ReduceOp>(
@@ -581,6 +584,76 @@ struct ConvertReduce : OpConversionPattern<ekl::ReduceOp> {
             reduce.getResult(0),
             ValueRange{});
         return success();
+    }
+
+private:
+    FailureOr<Value> createNeutral(OpBuilder &builder, ReduceOp op) const
+    {
+        auto binFn = op.getReductionExpression().getDefiningOp();
+        if (!binFn || binFn->getOperands() != op.getReduction()->getArguments())
+            return failure();
+
+        const auto scalarTy = getTypeConverter()->convertType(op.getType());
+        return llvm::TypeSwitch<Operation *, FailureOr<Value>>(binFn)
+            .Case([&](AddOp) {
+                if (llvm::isa<FloatType>(scalarTy))
+                    return builder.create<arith::ConstantOp>(
+                        op.getLoc(),
+                        builder.getFloatAttr(scalarTy, 0.0));
+                return builder.create<arith::ConstantOp>(
+                    op.getLoc(),
+                    builder.getIntegerAttr(scalarTy, 0));
+            })
+            .Case([&](MultiplyOp) {
+                if (llvm::isa<FloatType>(scalarTy))
+                    return builder.create<arith::ConstantOp>(
+                        op.getLoc(),
+                        builder.getFloatAttr(scalarTy, 1.0));
+                return builder.create<arith::ConstantOp>(
+                    op.getLoc(),
+                    builder.getIntegerAttr(scalarTy, 1));
+            })
+            .Case([&](MinOp min) {
+                if (auto floatTy = llvm::dyn_cast<FloatType>(scalarTy))
+                    return builder.create<arith::ConstantOp>(
+                        op.getLoc(),
+                        builder.getFloatAttr(
+                            scalarTy,
+                            APFloat::getInf(floatTy.getFloatSemantics())));
+                const auto width =
+                    getTypeBound(min.getType()).getIntOrFloatBitWidth();
+                if (getTypeBound(min.getType()).isSignedInteger())
+                    return builder.create<arith::ConstantOp>(
+                        op.getLoc(),
+                        builder.getIntegerAttr(
+                            scalarTy,
+                            APInt::getSignedMaxValue(width)));
+                return builder.create<arith::ConstantOp>(
+                    op.getLoc(),
+                    builder.getIntegerAttr(scalarTy, APInt::getAllOnes(width)));
+            })
+            .Case([&](MaxOp max) {
+                if (auto floatTy = llvm::dyn_cast<FloatType>(scalarTy))
+                    return builder.create<arith::ConstantOp>(
+                        op.getLoc(),
+                        builder.getFloatAttr(
+                            scalarTy,
+                            APFloat::getInf(
+                                floatTy.getFloatSemantics(),
+                                true)));
+                const auto width =
+                    getTypeBound(max.getType()).getIntOrFloatBitWidth();
+                if (getTypeBound(max.getType()).isSignedInteger())
+                    return builder.create<arith::ConstantOp>(
+                        op.getLoc(),
+                        builder.getIntegerAttr(
+                            scalarTy,
+                            APInt::getSignedMinValue(width)));
+                return builder.create<arith::ConstantOp>(
+                    op.getLoc(),
+                    builder.getIntegerAttr(scalarTy, APInt::getZero(width)));
+            })
+            .Default([&](auto) -> FailureOr<Value> { return failure(); });
     }
 };
 
