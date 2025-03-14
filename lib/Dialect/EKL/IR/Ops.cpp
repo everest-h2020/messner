@@ -6,18 +6,14 @@
 #include "messner/Dialect/EKL/IR/Ops.h"
 
 #include "messner/Dialect/EKL/Analysis/AbstractTypeChecker.h"
+#include "messner/Dialect/EKL/Analysis/TypeCheckingAdaptor.h"
 #include "messner/Dialect/EKL/IR/Attributes.h"
-#include "messner/Dialect/EKL/IR/EKL.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/OpImplementation.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include <algorithm>
-#include <bit>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/Casting.h>
 #include <mlir/IR/OpDefinition.h>
+#include <mlir/IR/OpImplementation.h>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -548,7 +544,7 @@ LogicalResult StaticOp::verify()
             << getType();
     }
 
-    if (const auto initializer = getInitializerAttr()) {
+    if (const auto initializer = getInitializerAttr(); initializer) {
         // If an initializer was provided, it must be valid.
         if (!isOwned())
             return emitOpError() << "can't initialize imported value";
@@ -871,7 +867,7 @@ Speculation::Speculatability SubscriptOp::getSpeculatability()
     const auto isSpeculatable = [](Type type) {
         const auto bound = getTypeBound(type);
         if (!bound) return false;
-        if (const auto indexTy = llvm::dyn_cast<ekl::IndexType>(bound))
+        if (const auto indexTy = llvm::dyn_cast<ekl::IndexType>(bound); indexTy)
             return !indexTy.isUnbounded();
         return llvm::isa<ExtentType>(bound);
     };
@@ -1088,7 +1084,7 @@ LogicalResult StackOp::typeCheck(AbstractTypeChecker &typeChecker)
 LogicalResult YieldOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     // When this op is invalidated, the parent should update as well.
-    if (const auto parent = (*this)->getParentOp())
+    if (const auto parent = (*this)->getParentOp(); parent)
         typeChecker.invalidate(parent);
 
     return success();
@@ -1357,7 +1353,7 @@ LogicalResult ReduceOp::typeCheck(AbstractTypeChecker &typeChecker)
         return failure();
 
     // Refine the bound on the accumulator expression.
-    if (const auto init = getInitExpression()) {
+    if (const auto init = getInitExpression(); init) {
         // The accumulator expression must accept the initializer.
         const auto initTy = adaptor.getType(init);
         if (!initTy) return success();
@@ -1490,7 +1486,8 @@ LogicalResult ChoiceOp::typeCheck(AbstractTypeChecker &typeChecker)
     unsigned minArity = 1;
     if (llvm::isa<BoolType>(choiceTy)) {
         minArity = 2;
-    } else if (const auto indexTy = llvm::dyn_cast<ekl::IndexType>(choiceTy)) {
+    } else if (const auto indexTy = llvm::dyn_cast<ekl::IndexType>(choiceTy);
+               indexTy) {
         if (!indexTy.isUnbounded()) minArity = indexTy.getUpperBound() + 1UL;
     } else {
         auto diag = emitError() << "selector must be bool or index";
