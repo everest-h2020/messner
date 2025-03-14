@@ -102,89 +102,6 @@ private:
     }
 };
 
-struct EliminateIf : OpRewritePattern<IfOp> {
-    using OpRewritePattern<IfOp>::OpRewritePattern;
-
-    LogicalResult
-    matchAndRewrite(IfOp op, PatternRewriter &rewriter) const final
-    {
-        // Only applies to expression-style ifs.
-        if (!op.getResult())
-            return rewriter.notifyMatchFailure(op, "only applies to if-expr");
-
-        // Only applies if both branches are known to yield the same thing.
-        const auto value = op.getThenBranch()->back().getOperand(0);
-        if (value != op.getElseBranch()->back().getOperand(0))
-            return rewriter.notifyMatchFailure(
-                op,
-                "only applies to equal expressions");
-
-        // Short-circuit the result of the if.
-        rewriter.replaceAllUsesWith(op.getResult(), value);
-        return success();
-    }
-};
-
-struct DissolveIf : OpRewritePattern<IfOp> {
-    using OpRewritePattern<IfOp>::OpRewritePattern;
-
-    LogicalResult
-    matchAndRewrite(IfOp op, PatternRewriter &rewriter) const final
-    {
-        // Determine if there is a statically-known code path.
-        BoolAttr condition;
-        if (!matchPattern(op.getCondition(), m_Constant(&condition)))
-            return rewriter.notifyMatchFailure(
-                op,
-                "only applies to known conditionals");
-
-        // Inline the statically-known code path before the IfOp.
-        auto branch =
-            condition.getValue() ? op.getThenBranch() : op.getElseBranch();
-        auto yieldOp = llvm::cast<YieldOp>(branch->getTerminator());
-        rewriter.inlineBlockBefore(branch, op);
-
-        // Since the yield type may be a subtype of the result type, unify.
-        rewriter.setInsertionPoint(yieldOp);
-        const auto result = rewriter
-                                .create<UnifyOp>(
-                                    yieldOp->getLoc(),
-                                    yieldOp.getExpression(),
-                                    op.getType(0))
-                                .getResult();
-
-        // Erase the extraneous terminator and throw away the rest of the IfOp.
-        yieldOp.erase();
-        rewriter.replaceOp(op, result);
-        return success();
-    }
-};
-
-struct RewriteIfToStatement : OpRewritePattern<IfOp> {
-    using OpRewritePattern::OpRewritePattern;
-
-    LogicalResult
-    matchAndRewrite(IfOp op, PatternRewriter &rewriter) const final
-    {
-        if (!op.isExpression()) return failure();
-        if (!op.getResult().use_empty()) return failure();
-
-        auto result = rewriter.create<IfOp>(op.getLoc(), op.getCondition());
-        rewriter.inlineBlockBefore(
-            op.getThenBranch(),
-            result.getThenBranch(),
-            result.getThenBranch()->end());
-        rewriter.eraseOp(result.getThenBranch()->getTerminator());
-        rewriter.inlineBlockBefore(
-            op.getElseBranch(),
-            result.getElseBranch(),
-            result.getElseBranch()->end());
-        rewriter.eraseOp(result.getElseBranch()->getTerminator());
-        rewriter.eraseOp(op);
-        return success();
-    }
-};
-
 struct RewriteIfToChoice : OpRewritePattern<IfOp> {
     using OpRewritePattern::OpRewritePattern;
 
@@ -324,24 +241,6 @@ struct RewriteSubscriptToAssoc : OpRewritePattern<SubscriptOp> {
                                          .getResult();
                 builder.create<YieldOp>(loc, element);
             });
-        return success();
-    }
-};
-
-struct DissolveZip : OpRewritePattern<ZipOp> {
-    using OpRewritePattern::OpRewritePattern;
-
-    LogicalResult
-    matchAndRewrite(ZipOp op, PatternRewriter &rewriter) const final
-    {
-        const auto resultTy =
-            llvm::dyn_cast<ScalarType>(op.getType().getTypeBound());
-        if (!resultTy) return failure();
-
-        auto yieldOp = llvm::cast<YieldOp>(op.getCombinator()->getTerminator());
-        rewriter.inlineBlockBefore(op.getCombinator(), op, op.getOperands());
-        rewriter.replaceOp(op, yieldOp.getOperand());
-        rewriter.eraseOp(yieldOp);
         return success();
     }
 };
@@ -508,14 +407,12 @@ void mlir::ekl::populateLowerPatterns(RewritePatternSet &patterns)
 {
     populateHoistPatterns(patterns);
 
-    patterns
-        .add<EliminateIf, DissolveIf, RewriteIfToStatement, RewriteIfToChoice>(
-            patterns.getContext());
+    patterns.add<RewriteIfToChoice>(patterns.getContext());
 
     patterns.add<ExpandEllipsisSubscript, RewriteSubscriptToAssoc>(
         patterns.getContext());
 
-    patterns.add<DissolveZip, RewriteZipToAssoc>(patterns.getContext());
+    patterns.add<RewriteZipToAssoc>(patterns.getContext());
 
     patterns.add<CollapseAssoc, ReindexAssoc>(patterns.getContext());
 

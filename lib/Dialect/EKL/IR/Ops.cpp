@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/Casting.h>
 #include <mlir/IR/OpDefinition.h>
 
@@ -438,14 +439,6 @@ LogicalResult ProgramOp::verifyRegions()
 // IntroOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult IntroOp::fold(IntroOp::FoldAdaptor adaptor)
-{
-    // If the input value is a compatible LiteralAttr, it is materialized by the
-    // dialect. Otherwise, it will be passed along by the folder, but there is
-    // no guarantee this op will be deleted.
-    return adaptor.getValue();
-}
-
 bool IntroOp::areCastCompatible(TypeRange inputs, TypeRange outputs)
 {
     const auto in  = inputs.front();
@@ -471,23 +464,6 @@ LogicalResult IntroOp::inferReturnTypes(
 //===----------------------------------------------------------------------===//
 // EvalOp implementation
 //===----------------------------------------------------------------------===//
-
-OpFoldResult EvalOp::fold(EvalOp::FoldAdaptor adaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    if (auto intro = getOperand().getDefiningOp<IntroOp>()) {
-        if (intro.getOperand().getType() == getResult().getType()) {
-            // eval(intro(x : T) : T) = x
-            return intro.getOperand();
-        }
-    }
-
-    // Since the result type of the op is not an ExpressionType, the dialect
-    // constant materializer will not be able to materialize any attribute
-    // returned by this operation.
-    return adaptor.getExpression();
-}
 
 Speculation::Speculatability EvalOp::getSpeculatability()
 {
@@ -592,17 +568,6 @@ LogicalResult StaticOp::verify()
     if (isOwned() && isReadable())
         return emitOpError() << "readable local variable must be initialized";
 
-    return success();
-}
-
-LogicalResult StaticOp::canonicalize(StaticOp op, PatternRewriter &rewriter)
-{
-    // Remove the initializer attribute of a write-only local variable.
-    if (!op.getInitializerAttr() || op.isPublic() || !op.isOwned()
-        || op.isReadable())
-        return failure();
-
-    rewriter.modifyOpInPlace(op, [&]() { op.removeInitializerAttr(); });
     return success();
 }
 
@@ -901,38 +866,11 @@ LogicalResult GetStaticOp::typeCheck(AbstractTypeChecker &)
 // SubscriptOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult SubscriptOp::fold(SubscriptOp::FoldAdaptor adaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    // Fold away empty subscripts.
-    if (getSubscripts().empty()) return getArray();
-
-    // Must have constant array.
-    const auto array =
-        llvm::dyn_cast_if_present<ekl::ArrayAttr>(adaptor.getArray());
-    if (!array) return {};
-
-    const auto bounds = array.getType().getExtents();
-    if (adaptor.getSubscripts().size() > bounds.size()) return {};
-
-    // Must be constant index values only.
-    SmallVector<extent_t> indices;
-    for (auto [attr, bound] :
-         llvm::zip_first(adaptor.getSubscripts(), bounds)) {
-        const auto indexAttr = llvm::dyn_cast_if_present<ekl::IndexAttr>(attr);
-        if (!indexAttr || indexAttr.getValue() >= bound) return {};
-        indices.push_back(indexAttr.getValue());
-    }
-
-    // Perform the subscript operation.
-    return array.subscript(indices);
-}
-
 Speculation::Speculatability SubscriptOp::getSpeculatability()
 {
     const auto isSpeculatable = [](Type type) {
-        const auto bound = llvm::cast<ExpressionType>(type).getTypeBound();
+        const auto bound = getTypeBound(type);
+        if (!bound) return false;
         if (const auto indexTy = llvm::dyn_cast<ekl::IndexType>(bound))
             return !indexTy.isUnbounded();
         return llvm::isa<ExtentType>(bound);
@@ -1126,18 +1064,6 @@ LogicalResult StackOp::verify()
     return success();
 }
 
-OpFoldResult StackOp::fold(StackOp::FoldAdaptor adaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    const auto arrayTy =
-        llvm::dyn_cast_if_present<ArrayType>(getType().getTypeBound());
-    if (!arrayTy) return {};
-    if (llvm::count(adaptor.getOperands(), Attribute{}) > 0) return {};
-
-    return ekl::ArrayAttr::get(arrayTy, adaptor.getOperands());
-}
-
 LogicalResult StackOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
@@ -1226,19 +1152,6 @@ void AssocOp::build(
     const auto extents = resultBound ? resultBound.getExtents() : ExtentRange{};
     build(builder, state, extents, map);
     state.types[0] = ExpressionType::get(builder.getContext(), resultBound);
-}
-
-OpFoldResult AssocOp::fold(AssocOp::FoldAdaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    // If the yielded expression was folded to a scalar, a splat can be derived.
-    const auto expr = getMapExpression();
-    ScalarAttr value;
-    if (!matchPattern(expr, m_Constant(&value))) return {};
-    return ekl::ArrayAttr::get(
-        llvm::cast<ArrayType>(getType().getTypeBound()),
-        value);
 }
 
 static Contradiction typeCheckMap(
@@ -1477,16 +1390,6 @@ Expression ReduceOp::getReductionExpression()
 // ConstexprOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult ConstexprOp::fold(ConstexprOp::FoldAdaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    // Fold to the constant expression value.
-    LiteralAttr literal;
-    if (matchPattern(getExpression(), m_Constant(&literal))) return literal;
-    return {};
-}
-
 LogicalResult ConstexprOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
@@ -1506,15 +1409,6 @@ Expression ConstexprOp::getExpression()
 // UnifyOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult UnifyOp::fold(UnifyOp::FoldAdaptor adaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    // Attributes are covariant in the IR, no unification happens. The
-    // materializer will produce a LiteralOp with a different type.
-    return adaptor.getOperand();
-}
-
 LogicalResult UnifyOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
@@ -1526,22 +1420,6 @@ LogicalResult UnifyOp::typeCheck(AbstractTypeChecker &typeChecker)
 //===----------------------------------------------------------------------===//
 // BroadcastOp implementation
 //===----------------------------------------------------------------------===//
-
-OpFoldResult BroadcastOp::fold(BroadcastOp::FoldAdaptor adaptor)
-{
-    if (!isSpeculatable(*this) || !adaptor.getOperand()) return {};
-
-    const auto resultTy = llvm::cast<ArrayType>(getType().getTypeBound());
-
-    // Fold scalar-to-array broadcasts.
-    if (const auto scalar = llvm::dyn_cast<ScalarAttr>(adaptor.getOperand()))
-        return ArrayAttr::get(resultTy, {scalar});
-    // Fold array-to-array broadcasts.
-    if (const auto array = llvm::dyn_cast<ekl::ArrayAttr>(adaptor.getOperand()))
-        return array.broadcastTo(resultTy.getExtents());
-
-    return {};
-}
 
 LogicalResult BroadcastOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
@@ -1575,181 +1453,11 @@ ExtentRange BroadcastOp::getExtents()
 // CoerceOp implementation
 //===----------------------------------------------------------------------===//
 
-[[nodiscard]] static ekl::IntegerAttr
-coerce(ScalarAttr input, ekl::IntegerType output)
-{
-    return llvm::TypeSwitch<ScalarAttr, ekl::IntegerAttr>(input)
-        .Case([&](NumberAttr attr) {
-            auto value = attr.getValue();
-            value.roundTowardsZero();
-            return ::coerce(
-                ekl::IntegerAttr::get(
-                    input.getContext(),
-                    llvm::APSInt(value.getMantissa(), true)),
-                output);
-        })
-        .Case([&](ekl::IntegerAttr attr) {
-            auto value    = attr.getValue();
-            auto adjValue = attr.getType().isSigned()
-                              ? value.sextOrTrunc(output.getWidth())
-                              : value.zextOrTrunc(output.getWidth());
-            return ekl::IntegerAttr::get(
-                input.getContext(),
-                llvm::APSInt(adjValue, output.isUnsigned()));
-        })
-        .Case([&](FloatAttr attr) {
-            llvm::APSInt result(output.getWidth(), output.isUnsigned());
-            bool isExact;
-            const auto status = attr.getValue().convertToInteger(
-                result,
-                llvm::APFloat::roundingMode::NearestTiesToEven,
-                &isExact);
-            (void)status;
-            // TODO: Check status.
-            return ekl::IntegerAttr::get(attr.getContext(), result);
-        })
-        .Case([&](ekl::IndexAttr attr) {
-            return ::coerce(
-                ekl::IntegerAttr::get(
-                    input.getContext(),
-                    llvm::APSInt(llvm::APInt(64U, attr.getValue()), true)),
-                output);
-        })
-        .Default(ekl::IntegerAttr{});
-}
-
-[[nodiscard]] static FloatAttr coerce(ScalarAttr input, FloatType output)
-{
-    return llvm::TypeSwitch<ScalarAttr, FloatAttr>(input)
-        .Case([&](NumberAttr attr) {
-            return FloatAttr::get(
-                output,
-                attr.getValue().toAPFloatWithRounding(
-                    const_cast<llvm::fltSemantics &>(
-                        output.getFloatSemantics())));
-        })
-        .Case([&](ekl::IntegerAttr attr) {
-            llvm::APFloat value(output.getFloatSemantics());
-            value.convertFromAPInt(
-                attr.getValue(),
-                attr.getType().isSigned(),
-                llvm::APFloat::roundingMode::NearestTiesToEven);
-            return FloatAttr::get(output, value);
-        })
-        .Case([&](FloatAttr attr) {
-            auto value = attr.getValue();
-            bool losesInfo;
-            value.convert(
-                output.getFloatSemantics(),
-                llvm::APFloat::roundingMode::NearestTiesToEven,
-                &losesInfo);
-            return FloatAttr::get(output, value);
-        })
-        .Case([&](ekl::IndexAttr attr) {
-            return FloatAttr::get(output, static_cast<double>(attr.getValue()));
-        })
-        .Default(FloatAttr{});
-}
-
-[[nodiscard]] static ekl::IndexAttr
-coerce(ScalarAttr input, ekl::IndexType output)
-{
-    return llvm::TypeSwitch<ScalarAttr, ekl::IndexAttr>(input)
-        .Case([&](NumberAttr attr) {
-            auto value = attr.getValue();
-            value.roundTowardsZero();
-            return ::coerce(
-                ekl::IntegerAttr::get(
-                    input.getContext(),
-                    llvm::APSInt(value.getMantissa(), true)),
-                output);
-        })
-        .Case([&](ekl::IntegerAttr attr) {
-            auto value = attr.getValue();
-            if (value.getActiveBits() > 64U) return ekl::IndexAttr{};
-            const auto intValue = value.getZExtValue();
-            if (intValue > output.getUpperBound()) return ekl::IndexAttr{};
-            return ekl::IndexAttr::get(input.getContext(), intValue);
-        })
-        .Case([&](FloatAttr attr) {
-            llvm::APSInt intValue(64U, true);
-            bool isExact;
-            const auto status = attr.getValue().convertToInteger(
-                intValue,
-                llvm::APFloat::roundingMode::NearestTiesToEven,
-                &isExact);
-            (void)status;
-            // TODO: Check status.
-            return ekl::IndexAttr::get(
-                input.getContext(),
-                intValue.getZExtValue());
-        })
-        .Case([&](ekl::IndexAttr attr) {
-            if (attr.getValue() > output.getUpperBound())
-                return ekl::IndexAttr{};
-            return attr;
-        })
-        .Default(ekl::IndexAttr{});
-}
-
-[[nodiscard]] static ScalarAttr coerce(ScalarAttr input, ScalarType output)
-{
-    return llvm::TypeSwitch<ScalarType, ScalarAttr>(output)
-        .Case([&](ekl::IntegerType type) { return ::coerce(input, type); })
-        .Case([&](FloatType type) { return ::coerce(input, type); })
-        .Case([&](ekl::IndexType type) { return ::coerce(input, type); })
-        .Default(ScalarAttr{});
-}
-
-[[nodiscard]] static ekl::ArrayAttr
-coerce(ekl::ArrayAttr input, ScalarType output)
-{
-    SmallVector<Attribute> stack(input.getStack().getValue());
-    for (auto &attr : stack)
-        if (const auto arrayAttr = llvm::dyn_cast<ekl::ArrayAttr>(attr))
-            attr = coerce(arrayAttr, output);
-        else if (const auto scalarAttr = llvm::dyn_cast<ScalarAttr>(attr))
-            attr = coerce(scalarAttr, output);
-        else
-            return {};
-
-    return ekl::ArrayAttr::get(input.getArrayType().cloneWith(output), stack);
-}
-
-OpFoldResult CoerceOp::fold(CoerceOp::FoldAdaptor adaptor)
-{
-    if (!isSpeculatable(*this) || !adaptor.getOperand()) return {};
-
-    if (const auto arrayTy =
-            llvm::dyn_cast<ekl::ArrayType>(getType().getTypeBound()))
-        return coerce(
-            llvm::cast<ekl::ArrayAttr>(adaptor.getOperand()),
-            arrayTy.getScalarType());
-    if (const auto scalarTy =
-            llvm::dyn_cast<ekl::ScalarType>(getType().getTypeBound()))
-        return coerce(
-            llvm::cast<ekl::ScalarAttr>(adaptor.getOperand()),
-            scalarTy);
-
-    return {};
-}
-
 LogicalResult CoerceOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
 
     return adaptor.coerce(getOperand(), getType().getTypeBound());
-}
-
-LogicalResult
-CoerceOp::canonicalize(CoerceOp op, ::mlir::PatternRewriter &rewriter)
-{
-    const auto inTy  = getTypeBound(op.getOperand());
-    const auto outTy = getTypeBound(op.getResult().getType());
-    if (!isSubtype(inTy, outTy)) return failure();
-
-    rewriter.replaceOpWithNewOp<UnifyOp>(op, op.getOperand(), outTy);
-    return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -1971,42 +1679,12 @@ LogicalResult AddOp::typeCheck(AbstractTypeChecker &typeChecker)
         });
 }
 
-OpFoldResult AddOp::fold(FoldAdaptor adaptor)
-{
-    const auto lhs =
-        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getLhs());
-    const auto rhs =
-        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getRhs());
-    if (!lhs || !rhs) return {};
-
-    extent_t result = 0;
-    if (__builtin_add_overflow(lhs.getValue(), rhs.getValue(), &result))
-        return {};
-
-    return ekl::IndexAttr::get(getContext(), result);
-}
-
 LogicalResult SubtractOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
     return typeCheckArithmeticOp(
         adaptor,
         [](ArrayRef<uint64_t> bounds) -> uint64_t { return bounds[0]; });
-}
-
-OpFoldResult SubtractOp::fold(FoldAdaptor adaptor)
-{
-    const auto lhs =
-        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getLhs());
-    const auto rhs =
-        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getRhs());
-    if (!lhs || !rhs) return {};
-
-    extent_t result = 0;
-    if (__builtin_sub_overflow(lhs.getValue(), rhs.getValue(), &result))
-        return {};
-
-    return ekl::IndexAttr::get(getContext(), result);
 }
 
 LogicalResult MultiplyOp::typeCheck(AbstractTypeChecker &typeChecker)
@@ -2019,21 +1697,6 @@ LogicalResult MultiplyOp::typeCheck(AbstractTypeChecker &typeChecker)
                 return ekl::IndexType::kUnbounded;
             return bounds[0] * bounds[1];
         });
-}
-
-OpFoldResult MultiplyOp::fold(FoldAdaptor adaptor)
-{
-    const auto lhs =
-        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getLhs());
-    const auto rhs =
-        llvm::dyn_cast_if_present<ekl::IndexAttr>(adaptor.getRhs());
-    if (!lhs || !rhs) return {};
-
-    extent_t result = 0;
-    if (__builtin_mul_overflow(lhs.getValue(), rhs.getValue(), &result))
-        return {};
-
-    return ekl::IndexAttr::get(getContext(), result);
 }
 
 LogicalResult DivideOp::typeCheck(AbstractTypeChecker &typeChecker)

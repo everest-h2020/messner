@@ -4,6 +4,7 @@ add_mlir_library(EKLTransforms
         Implement.cpp
         Lift.cpp
         Lower.cpp
+        Simplify.cpp
         TypeCheck.cpp
 
     ENABLE_AGGREGATION

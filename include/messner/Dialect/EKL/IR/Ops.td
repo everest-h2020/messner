@@ -253,7 +253,7 @@ def EKL_StaticOp : EKL_SymbolBase<"static"> {
     }];
 
     let hasVerifier = 1;
-    let hasCanonicalizeMethod = 1;
+    let hasFolder = 1;
 
     code extraClassDeclaration = [{
         [[nodiscard]] bool isOwned() { return getIsOwned(); }
@@ -481,6 +481,8 @@ def EKL_IfOp : EKL_StatementBase<
     //       ensure our verifier runs before the TypeCheckOpInterface verifier,
     //       which is set to verifyWithRegions.
     let hasVerifier = 1;
+    let hasFolder = 1;
+    let hasCanonicalizer = 1;
 
     let assemblyFormat = [{
         custom<Operand>($condition, type($condition))
@@ -730,6 +732,7 @@ def EKL_SubscriptOp : EKL_ExpressionBase<
     let skipDefaultBuilders = 1;
 
     let hasFolder = 1;
+    let hasCanonicalizer = 1;
 
     let assemblyFormat = [{
         custom<Operand>($array, type($array))
@@ -867,6 +870,7 @@ def EKL_AssocOp : EKL_GeneratorBase<
     let skipDefaultBuilders = 1;
 
     let hasFolder = 1;
+    let hasCanonicalizer = 1;
 
     let assemblyFormat = [{
         custom<Functor>($mapRegion)
@@ -924,6 +928,7 @@ def EKL_ZipOp : EKL_GeneratorBase<"zip"> {
     let skipDefaultBuilders = 1;
 
     let hasVerifier = 1;
+    let hasCanonicalizer = 1;
 
     let assemblyFormat = [{
         `(` custom<Operands>($operands, type($operands)) `)`
@@ -1231,6 +1236,16 @@ def EKL_BroadcastOp : EKL_CastBase<"broadcast"> {
                 operand,
                 getSignedExtentsAttr($_builder.getContext(), extents),
                 resultBound);
+        }]>,
+        OpBuilder<(ins
+                "Value":$operand,
+                "ArrayType":$resultBound), [{
+            build(
+                $_builder,
+                $_state,
+                operand,
+                resultBound.getExtents(),
+                resultBound);
         }]>];
     let skipDefaultBuilders = 1;
 
@@ -1283,7 +1298,7 @@ def EKL_CoerceOp : EKL_CastBase<"coerce"> {
     }];
 
     let hasFolder = 1;
-    let hasCanonicalizeMethod = 1;
+    let hasCanonicalizer = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1338,6 +1353,7 @@ def EKL_ChoiceOp : EKL_Operator<"choice"> {
     // NOTE: Unfortunately, minSize on Variadic can't be used, so this can't be
     //       an early executed ODS verifier.
     let hasVerifier = 1;
+    let hasCanonicalizer = 1;
 
     let assemblyFormat = [{
         custom<Operand>($selector, type($selector))
@@ -1365,6 +1381,8 @@ def EKL_CompareOp : EKL_BinaryOperator<"cmp", [EKL_RelationalOp]> {
                 CArg<"Type", "{}">:$resultBound)>];
     let skipDefaultBuilders = 1;
 
+    let hasFolder = 1;
+
     let assemblyFormat = [{
         $kind
         custom<Operand>($lhs, type($lhs))```,`
@@ -1374,12 +1392,16 @@ def EKL_CompareOp : EKL_BinaryOperator<"cmp", [EKL_RelationalOp]> {
     }];
 }
 
-def EKL_MinOp : EKL_BinaryOperator<"min", [EKL_RelationalOp]> {
+def EKL_MinOp : EKL_BinaryOperator<"min", [EKL_RelationalOp, Commutative]> {
     let summary = "Minimum operator";
+
+    let hasFolder = 1;
 }
 
-def EKL_MaxOp : EKL_BinaryOperator<"max", [EKL_RelationalOp]> {
+def EKL_MaxOp : EKL_BinaryOperator<"max", [EKL_RelationalOp, Commutative]> {
     let summary = "Maximum operator";
+
+    let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1388,12 +1410,18 @@ def EKL_MaxOp : EKL_BinaryOperator<"max", [EKL_RelationalOp]> {
 
 def EKL_LogicalNotOp : EKL_UnaryOperator<"lnot", [EKL_LogicalOp]> {
     let summary = "Logical negation operator";
+
+    let hasFolder = 1;
 }
-def EKL_LogicalOrOp : EKL_BinaryOperator<"lor", [EKL_LogicalOp]> {
+def EKL_LogicalOrOp : EKL_BinaryOperator<"lor", [EKL_LogicalOp, Commutative]> {
     let summary = "Logical disjunction operator";
+
+    let hasFolder = 1;
 }
-def EKL_LogicalAndOp : EKL_BinaryOperator<"land", [EKL_LogicalOp]> {
+def EKL_LogicalAndOp : EKL_BinaryOperator<"land", [EKL_LogicalOp, Commutative]> {
     let summary = "Logical conjunction operator";
+
+    let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1402,24 +1430,33 @@ def EKL_LogicalAndOp : EKL_BinaryOperator<"land", [EKL_LogicalOp]> {
 
 def EKL_NegateOp : EKL_UnaryOperator<"neg", [EKL_ArithmeticOp]> {
     let summary = "Unary minus operator";
+
+    let hasFolder = 1;
 }
-def EKL_AddOp : EKL_BinaryOperator<"add", [EKL_ArithmeticOp]> {
+def EKL_AddOp : EKL_BinaryOperator<"add", [EKL_ArithmeticOp, Commutative]> {
     let summary = "Addition operator";
+
     let hasFolder = 1;
 }
 def EKL_SubtractOp : EKL_BinaryOperator<"sub", [EKL_ArithmeticOp]> {
     let summary = "Subtraction operator";
+
     let hasFolder = 1;
 }
-def EKL_MultiplyOp : EKL_BinaryOperator<"mul", [EKL_ArithmeticOp]> {
+def EKL_MultiplyOp : EKL_BinaryOperator<"mul", [EKL_ArithmeticOp, Commutative]> {
     let summary = "Multiplication operator";
+
     let hasFolder = 1;
 }
 def EKL_DivideOp : EKL_BinaryOperator<"div", [EKL_ArithmeticOp]> {
     let summary = "Division operator";
+
+    let hasFolder = 1;
 }
 def EKL_RemainderOp : EKL_BinaryOperator<"rem", [EKL_ArithmeticOp]> {
     let summary = "Remainder operator";
+
+    let hasFolder = 1;
 }
 def EKL_PowerOp : EKL_BinaryOperator<"pow", [EKL_ArithmeticOp]> {
     let summary = "Power operator";
