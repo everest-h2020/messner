@@ -905,6 +905,9 @@ OpFoldResult SubscriptOp::fold(SubscriptOp::FoldAdaptor adaptor)
 {
     if (!isSpeculatable(*this)) return {};
 
+    // Fold away empty subscripts.
+    if (getSubscripts().empty()) return getArray();
+
     // Must have constant array.
     const auto array =
         llvm::dyn_cast_if_present<ekl::ArrayAttr>(adaptor.getArray());
