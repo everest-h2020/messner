@@ -1098,12 +1098,13 @@ void AssocOp::build(
     OpBuilder &builder,
     OperationState &state,
     unsigned numExtents,
-    FunctorBuilderRef map)
+    FunctorBuilderRef map,
+    ArrayType resultBound)
 {
     const auto unboundedTy = ExpressionType::get(builder.getContext());
 
     auto &functor = state.addRegion()->emplaceBlock();
-    state.addTypes({unboundedTy});
+    state.addTypes({ExpressionType::get(builder.getContext(), resultBound)});
 
     const auto loc = builder.getUnknownLoc();
     while (numExtents-- > 0U) functor.addArgument(unboundedTy, loc);
@@ -1119,10 +1120,11 @@ void AssocOp::build(
     OpBuilder &builder,
     OperationState &state,
     ExtentRange extents,
-    FunctorBuilderRef map)
+    FunctorBuilderRef map,
+    ArrayType resultBound)
 {
     auto &functor = state.addRegion()->emplaceBlock();
-    state.addTypes({ExpressionType::get(builder.getContext())});
+    state.addTypes({ExpressionType::get(builder.getContext(), resultBound)});
 
     const auto loc = builder.getUnknownLoc();
     for (auto extent : extents)

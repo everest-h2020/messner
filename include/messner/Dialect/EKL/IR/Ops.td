@@ -782,7 +782,7 @@ class EKL_GeneratorBase<string mnemonic, list<Trait> traits = []>
         : EKL_ExpressionBase<
             mnemonic,
             [EKL_GeneratorOp, OpAsmOpInterface] # traits> {
-// Remove the getSpeculatability() implementation from EKL_ExpressionBase.
+    // Remove the getSpeculatability() implementation from EKL_ExpressionBase.
     let extraClassDeclaration = "";
 }
 
@@ -862,10 +862,12 @@ def EKL_AssocOp : EKL_GeneratorBase<
     let builders = [
         OpBuilder<(ins
                 "unsigned":$numExtents,
-                CArg<"FunctorBuilderRef", "{}">:$map)>,
+                CArg<"FunctorBuilderRef", "{}">:$map,
+                CArg<"ArrayType", "{}">:$resultBound)>,
         OpBuilder<(ins
                 "ExtentRange":$extents,
-                CArg<"FunctorBuilderRef", "{}">:$map)>,
+                CArg<"FunctorBuilderRef", "{}">:$map,
+                CArg<"ArrayType", "{}">:$resultBound)>,
         OpBuilder<(ins
                 CArg<"ArrayType", "{}">:$resultBound,
                 CArg<"FunctorBuilderRef", "{}">:$map)>];
