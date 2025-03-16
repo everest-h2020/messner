@@ -782,6 +782,8 @@ class EKL_GeneratorBase<string mnemonic, list<Trait> traits = []>
         : EKL_ExpressionBase<
             mnemonic,
             [EKL_GeneratorOp, OpAsmOpInterface] # traits> {
+// Remove the getSpeculatability() implementation from EKL_ExpressionBase.
+    let extraClassDeclaration = "";
 }
 
 def EKL_YieldOp : EKL_Op<
