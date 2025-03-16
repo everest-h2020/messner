@@ -8,6 +8,7 @@
 #include "messner/Dialect/EKL/Analysis/AbstractTypeChecker.h"
 #include "messner/Dialect/EKL/Analysis/TypeCheckingAdaptor.h"
 #include "messner/Dialect/EKL/IR/Attributes.h"
+#include "messner/Dialect/EKL/IR/Types.h"
 
 #include <algorithm>
 #include <llvm/ADT/TypeSwitch.h>
@@ -658,11 +659,18 @@ LogicalResult WriteOp::typeCheck(AbstractTypeChecker &typeChecker)
             adaptor.require(getReference(), refTy, "writable reference"))
         return contra;
 
-    // The second operand must be a value that is assignable to that reference.
-    Type valueTy;
+    // The value operand must broadcast to the reference extents.
+    ArrayType storeTy;
     if (auto contra =
-            adaptor.require(getValue(), refTy.getArrayType(), valueTy))
+            adaptor.broadcast(getValue(), refTy.getExtents(), storeTy))
         return contra;
+
+    // The broadcasted type must be a subtype of the reference array type.
+    if (!isSubtype(storeTy, refTy.getArrayType())) {
+        auto diag = emitOpError() << "can't store value of type " << storeTy
+                                  << " in a " << refTy;
+        return diag;
+    }
 
     // There are no results to this operation.
     return success();
