@@ -281,7 +281,7 @@ struct TypeCheckingAdaptor : AbstractTypeChecker {
         return coerce(getType(expr), to).explain(expr);
     }
 
-    template<broadcast_type_constrait ResultType = BroadcastType>
+    template<broadcast_type_constraint ResultType = BroadcastType>
     Contradiction broadcastAndUnify(
         ValueRange exprs,
         ResultType &result,
