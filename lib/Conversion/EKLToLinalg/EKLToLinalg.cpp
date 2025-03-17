@@ -10,6 +10,7 @@
 #include "messner/Dialect/EKL/IR/Base.h"
 #include "messner/Dialect/EKL/IR/EKL.h"
 #include "messner/Dialect/EKL/IR/Ops.h"
+#include "messner/Dialect/EKL/IR/TypeUtils.h"
 #include "messner/Dialect/EKL/IR/Types.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
@@ -234,7 +235,15 @@ struct ConvertStack : OpConversionPattern<ekl::StackOp> {
         }
 
         SmallVector<Value> ins;
-        for (auto in : adaptor.getOperands())
+        for (auto in : adaptor.getOperands()) {
+            if (!llvm::isa<RankedTensorType>(in.getType())) {
+                ins.push_back(rewriter.create<tensor::FromElementsOp>(
+                    op.getLoc(),
+                    RankedTensorType::get({1}, in.getType()),
+                    in));
+                continue;
+            }
+
             ins.push_back(rewriter
                               .create<tensor::ExpandShapeOp>(
                                   op.getLoc(),
@@ -242,6 +251,7 @@ struct ConvertStack : OpConversionPattern<ekl::StackOp> {
                                   in,
                                   inReassoc)
                               .getResult());
+        }
 
         rewriter.replaceOpWithNewOp<tensor::ConcatOp>(op, 0, ins);
         return success();
