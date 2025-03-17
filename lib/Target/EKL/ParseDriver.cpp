@@ -123,7 +123,8 @@ emit(llvm::SourceMgr &sourceMgr, ImportLocation where, const llvm::Twine &msg)
 {
     // Do not indicate a source range if just a single character is referenced.
     // NOTE: May not actually be needed.
-    ArrayRef<llvm::SMRange> ranges(where);
+    llvm::SMRange rangesArray[] = {where};
+    ArrayRef<llvm::SMRange> ranges(rangesArray);
     if (where.begin == where.end) ranges = {};
 
     // Print a bold error message with the red "error:" label, prefixed by the
