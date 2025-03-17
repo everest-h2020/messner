@@ -1204,6 +1204,8 @@ def EKL_UnifyOp : EKL_CastBase<"unify"> {
         ekl.unify %a: si32 -> si64
         ```
     }];
+
+    let hasCanonicalizer = 1;
 }
 
 def EKL_BroadcastOp : EKL_CastBase<"broadcast"> {
@@ -1357,6 +1359,7 @@ def EKL_ChoiceOp : EKL_Operator<"choice"> {
     // NOTE: Unfortunately, minSize on Variadic can't be used, so this can't be
     //       an early executed ODS verifier.
     let hasVerifier = 1;
+    let hasFolder = 1;
     let hasCanonicalizer = 1;
 
     let assemblyFormat = [{
@@ -1386,6 +1389,7 @@ def EKL_CompareOp : EKL_BinaryOperator<"cmp", [EKL_RelationalOp]> {
     let skipDefaultBuilders = 1;
 
     let hasFolder = 1;
+    let hasCanonicalizer = 1;
 
     let assemblyFormat = [{
         $kind

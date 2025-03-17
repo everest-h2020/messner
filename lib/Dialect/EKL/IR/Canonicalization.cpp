@@ -6,10 +6,12 @@
 #include "messner/Dialect/EKL/Analysis/AbstractTypeChecker.h"
 #include "messner/Dialect/EKL/Enums.h"
 #include "messner/Dialect/EKL/IR/Attributes.h"
+#include "messner/Dialect/EKL/IR/EKL.h"
 #include "messner/Dialect/EKL/IR/Ops.h"
 #include "messner/Dialect/EKL/IR/TypeUtils.h"
 #include "messner/Dialect/EKL/IR/Types.h"
 
+#include <llvm/ADT/Sequence.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/Casting.h>
@@ -29,7 +31,7 @@ using namespace mlir::ekl;
 // IntroOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult IntroOp::fold(IntroOp::FoldAdaptor adaptor)
+OpFoldResult IntroOp::fold(FoldAdaptor adaptor)
 {
     // If the input value is a compatible LiteralAttr, it is materialized by the
     // dialect. Otherwise, it will be passed along by the folder, but there is
@@ -41,7 +43,7 @@ OpFoldResult IntroOp::fold(IntroOp::FoldAdaptor adaptor)
 // EvalOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult EvalOp::fold(EvalOp::FoldAdaptor adaptor)
+OpFoldResult EvalOp::fold(FoldAdaptor adaptor)
 {
     if (!isFullyTyped()) return {};
 
@@ -175,13 +177,20 @@ void IfOp::getCanonicalizationPatterns(
 // SubscriptOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult SubscriptOp::fold(SubscriptOp::FoldAdaptor adaptor)
+OpFoldResult SubscriptOp::fold(FoldAdaptor adaptor)
 {
     // Only applies to speculatable subscripts.
     if (!isSpeculatable(*this)) return {};
 
-    // Fold away empty subscripts.
-    if (getSubscripts().empty()) return getArray();
+    // Fold away subscripts into broadcasted scalars.
+    if (auto bcast = getArray().getDefiningOp<BroadcastOp>(); bcast)
+        if (llvm::isa_and_present<ScalarType>(
+                bcast.getOperand().getType().getTypeBound()))
+            return bcast.getOperand();
+
+    // Fold away no-op subscripts.
+    if (getSubscripts().empty() && getType() == getArray().getType())
+        return getArray();
 
     // Must have constant array.
     const auto array =
@@ -205,6 +214,55 @@ OpFoldResult SubscriptOp::fold(SubscriptOp::FoldAdaptor adaptor)
 }
 
 namespace {
+
+struct ExpandEllipsisSubscript : OpRewritePattern<SubscriptOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(SubscriptOp op, PatternRewriter &rewriter) const final
+    {
+        if (!op.isFullyTyped())
+            return rewriter.notifyMatchFailure(op, "requires concrete types");
+
+        // Find the ellipsis operand, if any.
+        const auto it = llvm::find_if(op.getSubscripts(), [](Value value) {
+            return llvm::isa<EllipsisType>(
+                llvm::cast<Expression>(value).getType().getTypeBound());
+        });
+        if (it == op.getSubscripts().end())
+            return rewriter.notifyMatchFailure(op, "requires ellipsis");
+
+        // Calculate the number of identities it should expand to.
+        const auto extentExprTy = ExpressionType::get(
+            rewriter.getContext(),
+            ExtentType::get(rewriter.getContext()));
+        // How many extents do we need to index?
+        const auto numExtents =
+            llvm::cast<ArrayType>(op.getArray().getType().getTypeBound())
+                .getNumExtents();
+        // How many extents did we insert?
+        const auto numExpanded = std::size_t(
+            llvm::count(op.getSubscripts().getTypes(), extentExprTy));
+        const auto expand =
+            numExtents - op.getSubscripts().size() + 1UL + numExpanded;
+
+        // Create an instance of the identity literal. We use the location of
+        // the ellipsis literal to track where they came from.
+        auto idLiteral = rewriter.create<LiteralOp>(
+            (*it).getLoc(),
+            IdentityAttr::get(rewriter.getContext()));
+        SmallVector<Value> identities(expand, idLiteral.getResult());
+
+        // Replace the single ellipsis operand with that many identity literals.
+        rewriter.modifyOpInPlace(op, [&]() {
+            op->setOperands(
+                op.getSubscripts().getBeginOperandIndex(),
+                1U,
+                identities);
+        });
+        return success();
+    }
+};
 
 struct MergeSubscripts : OpRewritePattern<SubscriptOp> {
     using OpRewritePattern::OpRewritePattern;
@@ -248,25 +306,131 @@ struct MergeSubscripts : OpRewritePattern<SubscriptOp> {
     }
 };
 
+struct InlineBroadcastSubscript : OpRewritePattern<SubscriptOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(SubscriptOp op, PatternRewriter &rewriter) const final
+    {
+        if (!op.isFullyTyped())
+            return rewriter.notifyMatchFailure(op, "requires concrete types");
+        auto bcast = op.getArray().getDefiningOp<BroadcastOp>();
+        if (!bcast)
+            return rewriter.notifyMatchFailure(
+                op,
+                "requires broadcast operand");
+        const auto inTy = llvm::dyn_cast_if_present<ArrayType>(
+            bcast.getOperand().getType().getTypeBound());
+        if (!inTy)
+            return rewriter.notifyMatchFailure(op, "requires concrete type");
+
+        // Directly index into the broadcasted operand.
+        rewriter.modifyOpInPlace(op, [&]() {
+            op.setOperand(0, bcast.getOperand());
+        });
+
+        // All size 1 input dimensions must be pinned.
+        SmallVector<OpOperand *> pin;
+        for (unsigned idx = 0; idx < op.getSubscripts().size(); ++idx)
+            if (inTy.getExtent(idx) == 1)
+                pin.push_back(&op->getOpOperand(1U + idx));
+        if (!pin.empty()) {
+            auto literal = rewriter.create<LiteralOp>(
+                op.getLoc(),
+                ekl::IndexAttr::get(getContext(), 0));
+            rewriter.modifyOpInPlace(op, [&]() {
+                for (auto opd : pin) opd->set(literal);
+            });
+        }
+
+        // Fix partial subscripting results.
+        if (const auto arrayTy =
+                llvm::dyn_cast<ArrayType>(op.getType().getTypeBound());
+            arrayTy) {
+            rewriter.setInsertionPointAfter(op);
+            auto sunken = rewriter.create<BroadcastOp>(
+                bcast.getLoc(),
+                op.getResult(),
+                arrayTy);
+            rewriter.replaceAllUsesExcept(op, sunken, sunken);
+            rewriter.modifyOpInPlace(op, [&]() {
+                op.getResult().setType(ExpressionType::get(
+                    getContext(),
+                    inTy.cloneWith(
+                        inTy.getExtents().take_back(arrayTy.getNumExtents()))));
+            });
+        }
+        return success();
+    }
+};
+
+struct PinSubscripts : OpRewritePattern<SubscriptOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(SubscriptOp op, PatternRewriter &rewriter) const final
+    {
+        // Collect trivial 0 indexers.
+        SmallVector<OpOperand *> pin;
+        for (auto &opd : op->getOpOperands().drop_front()) {
+            const auto indexTy = llvm::dyn_cast_if_present<ekl::IndexType>(
+                getTypeBound(opd.get()));
+            if (!indexTy || indexTy.getUpperBound() != 0) continue;
+            if (matchPattern(opd.get(), m_Constant())) continue;
+            pin.push_back(&opd);
+        }
+        if (pin.empty())
+            return rewriter.notifyMatchFailure(
+                op,
+                "requires known 0 subscripts");
+
+        auto literal = rewriter.create<LiteralOp>(
+            op.getLoc(),
+            ekl::IndexAttr::get(getContext(), 0));
+        rewriter.modifyOpInPlace(op, [&]() {
+            for (auto opd : pin) opd->set(literal);
+        });
+        return success();
+    }
+};
+
 } // namespace
 
 void SubscriptOp::getCanonicalizationPatterns(
     RewritePatternSet &results,
     MLIRContext *context)
 {
-    results.add<MergeSubscripts>(context);
+    results.add<
+        ExpandEllipsisSubscript,
+        MergeSubscripts,
+        InlineBroadcastSubscript,
+        PinSubscripts>(context);
 }
 
 //===----------------------------------------------------------------------===//
 // StackOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult StackOp::fold(StackOp::FoldAdaptor adaptor)
+OpFoldResult StackOp::fold(FoldAdaptor adaptor)
 {
     // Only applies to stacks with known result types.
     const auto arrayTy =
-        llvm::dyn_cast_if_present<ArrayType>(getType().getTypeBound());
+        llvm::cast_if_present<ArrayType>(getType().getTypeBound());
     if (!arrayTy) return {};
+
+    for (auto &op : getOperandsMutable()) {
+        // Short-circuit any no-op subscript operands to their arrays.
+        if (auto prior = op.get().getDefiningOp<SubscriptOp>();
+            prior && prior.getSubscripts().empty())
+            op.set(prior.getArray());
+
+        // Short-circuit any 0-dim broadcast operands to their scalars.
+        if (auto prior = op.get().getDefiningOp<BroadcastOp>();
+            prior
+            && llvm::isa_and_present<ScalarType>(
+                prior.getOperand().getType().getTypeBound()))
+            op.set(prior.getOperand());
+    }
 
     // All operands must be constant.
     if (llvm::count(adaptor.getOperands(), Attribute{}) > 0) return {};
@@ -321,13 +485,55 @@ struct InlineAssoc : OpRewritePattern<AssocOp> {
     }
 };
 
+struct RewriteAssocToBroadcast : OpRewritePattern<AssocOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(AssocOp op, PatternRewriter &rewriter) const final
+    {
+        const auto arrayTy =
+            llvm::cast_if_present<ArrayType>(op.getType().getTypeBound());
+        if (!arrayTy)
+            return rewriter.notifyMatchFailure(op, "requires concrete types");
+        if (!op.getMapExpression().getParentRegion()->isProperAncestor(
+                &op.getMapRegion()))
+            return rewriter.notifyMatchFailure(
+                op,
+                "requires invariant map expression");
+
+        // Convert the atom to the right type.
+        const auto atomType = llvm::cast_if_present<BroadcastType>(
+            op.getMapExpression().getType().getTypeBound());
+        auto atom = rewriter.create<UnifyOp>(
+            op.getLoc(),
+            op.getMapExpression(),
+            atomType.cloneWith(arrayTy.getScalarType()));
+
+        // Keep stacking the atom until it has the right rank.
+        auto extents = llvm::to_vector(atomType.getExtents());
+        auto array   = atom.getResult();
+        while (extents.size() < arrayTy.getNumExtents()) {
+            extents.insert(extents.begin(), 1);
+            auto stack = rewriter.create<StackOp>(
+                op.getLoc(),
+                array,
+                arrayTy.cloneWith(extents));
+            array = stack.getResult();
+        }
+
+        // Broadcast it to the result shape.
+        rewriter.replaceOpWithNewOp<BroadcastOp>(op, array, arrayTy);
+        return success();
+    }
+};
+
 } // namespace
 
 void AssocOp::getCanonicalizationPatterns(
     RewritePatternSet &results,
     MLIRContext *context)
 {
-    results.add<InlineAssoc>(context);
+    results.add<InlineAssoc, RewriteAssocToBroadcast>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -344,16 +550,36 @@ struct InlineZip : OpRewritePattern<ZipOp> {
     {
         const auto broadcastTy =
             llvm::cast_if_present<BroadcastType>(op.getType().getTypeBound());
-        if (!broadcastTy || !broadcastTy.getExtents().empty())
-            return rewriter.notifyMatchFailure(
-                op,
-                "requires concrete 0-dim result type");
+        if (!broadcastTy)
+            return rewriter.notifyMatchFailure(op, "requires concrete types");
+
+        SmallVector<OpOperand *> decay;
+        if (!llvm::all_of(op->getOpOperands(), [&](OpOperand &opd) {
+                const auto inTy = getTypeBound(opd.get());
+                if (!inTy) return false;
+                if (llvm::isa<ScalarType>(inTy)) return true;
+                const auto arrayTy = llvm::cast<ArrayType>(inTy);
+                if (arrayTy.getNumExtents() != 0) return false;
+                decay.push_back(&opd);
+                return true;
+            }))
+            return rewriter.notifyMatchFailure(op, "requires 0-dim operands");
+
+        // Decay 0-dim arrays to scalars.
+        for (auto opd : decay) {
+            auto subscript = rewriter.create<SubscriptOp>(
+                op.getLoc(),
+                opd->get(),
+                ValueRange{},
+                getScalarType(getTypeBound(opd->get())));
+            opd->set(subscript);
+        }
 
         // Inline the zip expression body in-place.
         auto yield = llvm::cast<YieldOp>(op.getCombinator()->getTerminator());
         rewriter.inlineBlockBefore(op.getCombinator(), op, op->getOperands());
 
-        // Replace the zip expression by unifying to the 0-dim result type.
+        // Replace the zip expression by unifying to the result type.
         rewriter.replaceOpWithNewOp<UnifyOp>(
             op,
             yield->getOperand(0),
@@ -379,20 +605,62 @@ struct RewriteZipToBroadcast : OpRewritePattern<ZipOp> {
                 "requires concrete array type");
 
         // Find the argument that is being forwarded.
-        const auto findResult = [&](Value expr) -> FailureOr<unsigned> {
+        const auto findResult = [&](Value expr) -> FailureOr<Value> {
+            if (expr.getParentRegion()->isProperAncestor(
+                    &op.getCombinatorRegion()))
+                return expr;
             for (auto arg : op.getCombinator()->getArguments())
-                if (expr == arg) return arg.getArgNumber();
+                if (expr == arg) return op->getOperand(arg.getArgNumber());
             return failure();
         };
         const auto maybeResult = findResult(op.getCombinatorExpression());
         if (failed(maybeResult))
             return rewriter.notifyMatchFailure(op, "requires trivial body");
 
-        // Replace the zip expression with a simple BroadcastOp.
-        rewriter.replaceOpWithNewOp<BroadcastOp>(
-            op,
-            op->getOperand(*maybeResult),
-            arrayTy);
+        const auto invariantTy =
+            llvm::cast_if_present<BroadcastType>(getTypeBound(*maybeResult));
+        if (!invariantTy)
+            return rewriter.notifyMatchFailure(
+                op,
+                "requires concrete invariant type");
+
+        // Broadcast to the right shape and then unify to the right type.
+        auto bcast = rewriter.create<BroadcastOp>(
+            op.getLoc(),
+            *maybeResult,
+            arrayTy.cloneWith(invariantTy.getScalarType()));
+        rewriter.replaceOpWithNewOp<UnifyOp>(op, bcast.getResult(), arrayTy);
+        return success();
+    }
+};
+
+struct UniqueZipOperands : OpRewritePattern<ZipOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(ZipOp op, PatternRewriter &rewriter) const final
+    {
+        llvm::DenseMap<Value, OpOperand *> uniquer;
+        llvm::DenseMap<OpOperand *, OpOperand *> remap;
+        for (auto &opd : op->getOpOperands()) {
+            const auto [it, added] = uniquer.try_emplace(opd.get(), &opd);
+            if (!added) remap.insert(std::make_pair(&opd, it->second));
+        }
+        if (remap.empty())
+            return rewriter.notifyMatchFailure(
+                op,
+                "requires duplicate operands");
+
+        rewriter.modifyOpInPlace(op, [&]() {
+            for (auto [from, to] : remap) {
+                const auto oldIdx = from->getOperandNumber();
+                rewriter.replaceAllUsesWith(
+                    op.getCombinator()->getArgument(oldIdx),
+                    op.getCombinator()->getArgument(to->getOperandNumber()));
+                op->eraseOperand(oldIdx);
+                op.getCombinator()->eraseArgument(oldIdx);
+            }
+        });
         return success();
     }
 };
@@ -403,14 +671,14 @@ void ZipOp::getCanonicalizationPatterns(
     RewritePatternSet &results,
     MLIRContext *context)
 {
-    results.add<InlineZip, RewriteZipToBroadcast>(context);
+    results.add<InlineZip, RewriteZipToBroadcast, UniqueZipOperands>(context);
 }
 
 //===----------------------------------------------------------------------===//
 // ConstexprOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult ConstexprOp::fold(ConstexprOp::FoldAdaptor)
+OpFoldResult ConstexprOp::fold(FoldAdaptor)
 {
     // Only applies to fully typed constant expressions.
     if (!isFullyTyped()) return {};
@@ -437,9 +705,92 @@ OpFoldResult UnifyOp::fold(FoldAdaptor adaptor)
         return getResult();
     }
 
+    // Implicitly short-circuit any scalar decay from a no-op subscript.
+    if (auto prior = getOperand().getDefiningOp<SubscriptOp>();
+        prior && prior.getSubscripts().empty()
+        && llvm::isa<ArrayType>(getType().getTypeBound())) {
+        setOperand(prior.getArray());
+        return getResult();
+    }
+
     // Attributes are covariant in the IR, no unification happens. The
     // materializer will produce a LiteralOp with a different type.
     return adaptor.getOperand();
+}
+
+namespace {
+
+template<class Cast>
+struct HoistCastBeforeBroadcast : OpRewritePattern<Cast> {
+    using OpRewritePattern<Cast>::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(Cast op, PatternRewriter &rewriter) const final
+    {
+        const auto outTy =
+            llvm::dyn_cast_if_present<ArrayType>(op.getType().getTypeBound());
+        if (!outTy)
+            return rewriter.notifyMatchFailure(
+                op,
+                "requires concrete array type");
+        auto bcast = op.getOperand().template getDefiningOp<BroadcastOp>();
+        if (!bcast)
+            return rewriter.notifyMatchFailure(
+                op,
+                "requires broadcast operand");
+        const auto inTy = llvm::dyn_cast_if_present<BroadcastType>(
+            bcast.getOperand().getType().getTypeBound());
+        if (!inTy)
+            return rewriter.notifyMatchFailure(
+                op,
+                "requires concrete broadcast input type");
+
+        // Create a sunken BroadcastOp and change the order of casts.
+        auto sink =
+            rewriter.create<BroadcastOp>(bcast.getLoc(), op.getResult(), outTy);
+        rewriter.replaceAllUsesExcept(op, sink, sink);
+        rewriter.modifyOpInPlace(op, [&]() {
+            op.setOperand(bcast.getOperand());
+            op.getResult().setType(ExpressionType::get(
+                rewriter.getContext(),
+                inTy.cloneWith(outTy.getScalarType())));
+        });
+        return success();
+    }
+};
+
+struct RewriteUnifyToBroadcast : OpRewritePattern<UnifyOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(UnifyOp op, PatternRewriter &rewriter) const final
+    {
+        const auto arrayTy =
+            llvm::dyn_cast_if_present<ArrayType>(op.getType().getTypeBound());
+        if (!arrayTy || arrayTy.getNumExtents() > 0)
+            return rewriter.notifyMatchFailure(op, "requires 0-dim array type");
+        if (!llvm::isa<ScalarType>(op.getOperand().getType().getTypeBound()))
+            return rewriter.notifyMatchFailure(op, "requires scalar operand");
+
+        auto bcast =
+            rewriter.create<BroadcastOp>(op.getLoc(), op.getResult(), arrayTy);
+        rewriter.replaceAllUsesExcept(op, bcast, bcast);
+        rewriter.modifyOpInPlace(op, [&]() {
+            op.getResult().setType(
+                ExpressionType::get(getContext(), arrayTy.getScalarType()));
+        });
+        return success();
+    }
+};
+
+} // namespace
+
+void UnifyOp::getCanonicalizationPatterns(
+    RewritePatternSet &results,
+    MLIRContext *context)
+{
+    results.add<HoistCastBeforeBroadcast<UnifyOp>, RewriteUnifyToBroadcast>(
+        context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -476,147 +827,7 @@ OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor)
 // CoerceOp implementation
 //===----------------------------------------------------------------------===//
 
-[[nodiscard]] static ekl::IntegerAttr
-coerce(ScalarAttr input, ekl::IntegerType output)
-{
-    return llvm::TypeSwitch<ScalarAttr, ekl::IntegerAttr>(input)
-        .Case([&](NumberAttr attr) {
-            auto value = attr.getValue();
-            value.roundTowardsZero();
-            return ::coerce(
-                ekl::IntegerAttr::get(
-                    input.getContext(),
-                    llvm::APSInt(value.getMantissa(), true)),
-                output);
-        })
-        .Case([&](ekl::IntegerAttr attr) {
-            auto value    = attr.getValue();
-            auto adjValue = attr.getType().isSigned()
-                              ? value.sextOrTrunc(output.getWidth())
-                              : value.zextOrTrunc(output.getWidth());
-            return ekl::IntegerAttr::get(
-                input.getContext(),
-                llvm::APSInt(adjValue, output.isUnsigned()));
-        })
-        .Case([&](FloatAttr attr) {
-            llvm::APSInt result(output.getWidth(), output.isUnsigned());
-            bool isExact;
-            attr.getValue().convertToInteger(
-                result,
-                llvm::APFloat::roundingMode::NearestTiesToEven,
-                &isExact);
-            return ekl::IntegerAttr::get(attr.getContext(), result);
-        })
-        .Case([&](ekl::IndexAttr attr) {
-            return ::coerce(
-                ekl::IntegerAttr::get(
-                    input.getContext(),
-                    llvm::APSInt(llvm::APInt(64U, attr.getValue()), true)),
-                output);
-        })
-        .Default(ekl::IntegerAttr{});
-}
-
-[[nodiscard]] static FloatAttr coerce(ScalarAttr input, FloatType output)
-{
-    return llvm::TypeSwitch<ScalarAttr, FloatAttr>(input)
-        .Case([&](NumberAttr attr) {
-            return FloatAttr::get(
-                output,
-                attr.getValue().toAPFloatWithRounding(
-                    const_cast<llvm::fltSemantics &>(
-                        output.getFloatSemantics())));
-        })
-        .Case([&](ekl::IntegerAttr attr) {
-            llvm::APFloat value(output.getFloatSemantics());
-            value.convertFromAPInt(
-                attr.getValue(),
-                attr.getType().isSigned(),
-                llvm::APFloat::roundingMode::NearestTiesToEven);
-            return FloatAttr::get(output, value);
-        })
-        .Case([&](FloatAttr attr) {
-            auto value = attr.getValue();
-            bool losesInfo;
-            value.convert(
-                output.getFloatSemantics(),
-                llvm::APFloat::roundingMode::NearestTiesToEven,
-                &losesInfo);
-            return FloatAttr::get(output, value);
-        })
-        .Case([&](ekl::IndexAttr attr) {
-            return FloatAttr::get(output, static_cast<double>(attr.getValue()));
-        })
-        .Default(FloatAttr{});
-}
-
-[[nodiscard]] static ekl::IndexAttr
-coerce(ScalarAttr input, ekl::IndexType output)
-{
-    return llvm::TypeSwitch<ScalarAttr, ekl::IndexAttr>(input)
-        .Case([&](NumberAttr attr) {
-            auto value = attr.getValue();
-            value.roundTowardsZero();
-            return ::coerce(
-                ekl::IntegerAttr::get(
-                    input.getContext(),
-                    llvm::APSInt(value.getMantissa(), true)),
-                output);
-        })
-        .Case([&](ekl::IntegerAttr attr) {
-            auto value = attr.getValue();
-            if (value.getActiveBits() > 64U) return ekl::IndexAttr{};
-            const auto intValue = value.getZExtValue();
-            if (intValue > output.getUpperBound()) return ekl::IndexAttr{};
-            return ekl::IndexAttr::get(input.getContext(), intValue);
-        })
-        .Case([&](FloatAttr attr) {
-            llvm::APSInt intValue(64U, true);
-            bool isExact;
-            attr.getValue().convertToInteger(
-                intValue,
-                llvm::APFloat::roundingMode::NearestTiesToEven,
-                &isExact);
-            return ekl::IndexAttr::get(
-                input.getContext(),
-                intValue.getZExtValue());
-        })
-        .Case([&](ekl::IndexAttr attr) {
-            if (attr.getValue() > output.getUpperBound())
-                return ekl::IndexAttr{};
-            return attr;
-        })
-        .Default(ekl::IndexAttr{});
-}
-
-[[nodiscard]] static ScalarAttr coerce(ScalarAttr input, ScalarType output)
-{
-    return llvm::TypeSwitch<ScalarType, ScalarAttr>(output)
-        .Case([&](ekl::IntegerType type) { return ::coerce(input, type); })
-        .Case([&](FloatType type) { return ::coerce(input, type); })
-        .Case([&](ekl::IndexType type) { return ::coerce(input, type); })
-        .Default(ScalarAttr{});
-}
-
-[[nodiscard]] static ekl::ArrayAttr
-coerce(ekl::ArrayAttr input, ScalarType output)
-{
-    SmallVector<Attribute> stack(input.getStack().getValue());
-    for (auto &attr : stack) {
-        attr =
-            llvm::TypeSwitch<Attribute, Attribute>(attr)
-                .Case(
-                    [&](ekl::ArrayAttr array) { return coerce(array, output); })
-                .Case([&](ScalarAttr scalar) { return coerce(scalar, output); })
-                .Default([](auto) -> Attribute { return {}; });
-
-        if (!attr) return {};
-    }
-
-    return ekl::ArrayAttr::get(input.getArrayType().cloneWith(output), stack);
-}
-
-OpFoldResult CoerceOp::fold(CoerceOp::FoldAdaptor adaptor)
+OpFoldResult CoerceOp::fold(FoldAdaptor adaptor)
 {
     // Only applies to fully typed casts.
     // NOTE: The CastOpInterface folder already folds away no-op casts.
@@ -666,12 +877,26 @@ void CoerceOp::getCanonicalizationPatterns(
     RewritePatternSet &results,
     MLIRContext *context)
 {
-    results.add<RewriteCoerceToUnify>(context);
+    results.add<HoistCastBeforeBroadcast<CoerceOp>, RewriteCoerceToUnify>(
+        context);
 }
 
 //===----------------------------------------------------------------------===//
 // ChoiceOp implementation
 //===----------------------------------------------------------------------===//
+
+OpFoldResult ChoiceOp::fold(FoldAdaptor)
+{
+    // not c ? a : b = c ? b : a
+    if (auto lnot = getSelector().getDefiningOp<LogicalNotOp>(); lnot) {
+        (*this)->setOperands(
+            {lnot.getOperand(), getAlternatives()[1], getAlternatives()[0]});
+        return getResult();
+    }
+
+    // TODO: Implement general folding.
+    return {};
+}
 
 namespace {
 
@@ -735,13 +960,38 @@ struct RewriteChoiceToBroadcast : OpRewritePattern<ChoiceOp> {
     }
 };
 
+struct DecayChoiceToScalar : OpRewritePattern<ChoiceOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(ChoiceOp op, PatternRewriter &rewriter) const final
+    {
+        const auto arrayTy =
+            llvm::dyn_cast_if_present<ArrayType>(op.getType().getTypeBound());
+        if (!arrayTy || arrayTy.getNumExtents() != 0)
+            return rewriter.notifyMatchFailure(
+                op,
+                "requires 0-dim result array");
+
+        rewriter.setInsertionPointAfter(op);
+        auto bcast =
+            rewriter.create<BroadcastOp>(op.getLoc(), op.getResult(), arrayTy);
+        rewriter.replaceAllUsesExcept(op, bcast, bcast);
+        rewriter.modifyOpInPlace(op, [&]() {
+            op.getResult().setType(
+                ExpressionType::get(getContext(), arrayTy.getScalarType()));
+        });
+        return success();
+    }
+};
+
 } // namespace
 
 void ChoiceOp::getCanonicalizationPatterns(
     RewritePatternSet &results,
     MLIRContext *context)
 {
-    results.add<RewriteChoiceToBroadcast>(context);
+    results.add<RewriteChoiceToBroadcast, DecayChoiceToScalar>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -792,6 +1042,37 @@ OpFoldResult CompareOp::fold(FoldAdaptor adaptor)
 
     // TODO: Implement general folding.
     return {};
+}
+
+namespace {
+
+struct NegateComparison : OpRewritePattern<CompareOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(CompareOp op, PatternRewriter &rewriter) const final
+    {
+        if (!op->hasOneUse())
+            return rewriter.notifyMatchFailure(op, "requires single use");
+        auto lnot = llvm::dyn_cast<LogicalNotOp>(*op->user_begin());
+        if (!lnot)
+            return rewriter.notifyMatchFailure(op, "requires logical not user");
+
+        rewriter.modifyOpInPlace(op, [&]() {
+            op.setKind(negate(op.getKind()));
+        });
+        rewriter.replaceOp(lnot, op);
+        return success();
+    }
+};
+
+} // namespace
+
+void CompareOp::getCanonicalizationPatterns(
+    RewritePatternSet &results,
+    MLIRContext *context)
+{
+    results.add<NegateComparison>(context);
 }
 
 //===----------------------------------------------------------------------===//
