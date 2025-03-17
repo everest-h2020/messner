@@ -123,7 +123,7 @@ emit(llvm::SourceMgr &sourceMgr, ImportLocation where, const llvm::Twine &msg)
 {
     // Do not indicate a source range if just a single character is referenced.
     // NOTE: May not actually be needed.
-    ArrayRef<llvm::SMRange> ranges = {where};
+    ArrayRef<llvm::SMRange> ranges(where);
     if (where.begin == where.end) ranges = {};
 
     // Print a bold error message with the red "error:" label, prefixed by the
@@ -599,7 +599,7 @@ FailureOr<ConstExpr> ParseDriver::endConstexpr(Expr expr)
             return failure();
 
         // Apply all of our known constant evaluation patterns.
-        if (failed(applyPatternsAndFoldGreedily(
+        if (failed(applyPatternsGreedily(
                 cexprOp.getBodyRegion(),
                 *m_constexprPatterns)))
             return failure();

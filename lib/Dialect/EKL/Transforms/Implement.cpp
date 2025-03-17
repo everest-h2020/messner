@@ -267,7 +267,7 @@ void ImplementPass::runOnOperation()
 
     populateImplementPatterns(patterns);
 
-    if (failed(applyPatternsAndFoldGreedily(
+    if (failed(applyPatternsGreedily(
             getOperation(),
             FrozenRewritePatternSet(std::move(patterns)))))
         signalPassFailure();

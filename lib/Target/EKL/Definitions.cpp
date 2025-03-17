@@ -8,6 +8,7 @@
 #include "llvm/Support/Debug.h"
 
 #include <cassert>
+#include <mlir/IR/SymbolTable.h>
 
 #define DEBUG_TYPE "ekl-parser"
 
@@ -35,10 +36,11 @@ Definition::Definition(SymbolOpInterface symbol)
 
 Definition::Kind Definition::getKind() const
 {
-    if (this->is<SymbolOpInterface>()) return Kind::Symbol;
-    if (this->is<Expression>()) return Kind::Expression;
-    if (this->is<LiteralAttr>()) return Kind::Constant;
-    if (this->is<Type>()) return Kind::Type;
+    const auto &self = static_cast<const DefinitionUnion &>(*this);
+    if (llvm::isa<SymbolOpInterface>(self)) return Kind::Symbol;
+    if (llvm::isa<Expression>(self)) return Kind::Expression;
+    if (llvm::isa<LiteralAttr>(self)) return Kind::Constant;
+    if (llvm::isa<Type>(self)) return Kind::Type;
 
     llvm_unreachable("invalid Definition");
 }

@@ -211,7 +211,7 @@ void DecayNumberPass::runOnOperation()
 
     populateDecayNumberPatterns(patterns);
 
-    if (failed(applyPatternsAndFoldGreedily(
+    if (failed(applyPatternsGreedily(
             getOperation(),
             FrozenRewritePatternSet(std::move(patterns)))))
         signalPassFailure();
