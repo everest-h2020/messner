@@ -182,6 +182,14 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
         // -cse -canonicalize
         kernel.addPass(createCSEPass());
         kernel.addPass(createCanonicalizerPass());
+        // -ekl-lift -ekl-lower -ekl-homogenize -ekl-implement
+        kernel.addPass(createLiftPass());
+        kernel.addPass(createLowerPass());
+        kernel.addPass(createHomogenizePass());
+        kernel.addPass(createImplementPass());
+        // -cse -canonicalize
+        kernel.addPass(createCSEPass());
+        kernel.addPass(createCanonicalizerPass());
     }
 
     if (outputStage >= OutputStage::Lowered) {

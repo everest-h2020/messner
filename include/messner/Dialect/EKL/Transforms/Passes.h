@@ -59,11 +59,6 @@ void populateImplementPatterns(RewritePatternSet &patterns);
 /// Construct the ekl-implement pass.
 std::unique_ptr<Pass> createImplementPass();
 
-/// Adds the ekl-lift patterns to @p patterns .
-///
-/// @param  [in,out]    patterns    RewritePatternSet.
-void populateLiftPatterns(RewritePatternSet &patterns);
-
 /// Construct the ekl-lift pass.
 std::unique_ptr<Pass> createLiftPass();
 

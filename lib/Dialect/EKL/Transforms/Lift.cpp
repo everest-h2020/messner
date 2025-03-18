@@ -28,6 +28,7 @@
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/LogicalResult.h>
 #include <mlir/IR/OpDefinition.h>
+#include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/Visitors.h>
 
@@ -398,6 +399,15 @@ struct LiftAssoc : OpRewritePattern<AssocOp> {
         const auto maybeResult = prepareLiftAssoc(op, indices);
         if (failed(maybeResult) || !maybeResult->second) return failure();
 
+        LLVM_DEBUG(llvm::dbgs() << "[LiftAssoc] op: ";
+                   op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
+                   llvm::dbgs() << "\n");
+        LLVM_DEBUG(llvm::dbgs() << "[LiftAssoc] top: ";
+                   maybeResult->first->print(
+                       llvm::dbgs(),
+                       OpPrintingFlags().skipRegions());
+                   llvm::dbgs() << "\n");
+
         const auto arrayTy = llvm::cast<ArrayType>(getTypeBound(op.getType()));
         SmallVector<extent_t> extents;
         for (auto arg : indices) {
@@ -451,6 +461,8 @@ struct LiftReduce : OpRewritePattern<ReduceOp> {
 
         auto top = maybeResult->first;
         reduce->walk([&](Operation *op) {
+            if (op == reduce) return WalkResult::advance();
+
             for (auto opd : op->getOperands()) {
                 const auto definition = opd.getParentRegion();
                 if (reduce.getReductionRegion().isAncestor(definition)
@@ -464,10 +476,14 @@ struct LiftReduce : OpRewritePattern<ReduceOp> {
                 return WalkResult::skip();
             return WalkResult::advance();
         });
-        if (top == source) return failure();
+        if (reduce->getParentOp() == top || top == source) return failure();
 
-        if (llvm::equal(top.getMap()->getArguments(), indices))
-            return failure();
+        LLVM_DEBUG(llvm::dbgs() << "[LiftReduce] reduce: ";
+                   reduce->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
+                   llvm::dbgs() << "\n");
+        LLVM_DEBUG(llvm::dbgs() << "[LiftReduce] top: ";
+                   top->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
+                   llvm::dbgs() << "\n");
 
         const auto scalarTy =
             llvm::cast<ScalarType>(getTypeBound(reduce.getType()));
@@ -487,15 +503,12 @@ struct LiftReduce : OpRewritePattern<ReduceOp> {
         rewriter.setInsertionPointAfter(reduce);
         auto subscript = rewriter.create<SubscriptOp>(
             reduce.getLoc(),
-            lifted.getResult(),
+            lifted,
             ValueRange(indices),
             scalarTy);
-        rewriter.replaceAllUsesWith(reduce.getResult(), subscript.getResult());
+        rewriter.replaceAllUsesWith(reduce, subscript);
 
-        rewriter.moveOpBefore(
-            source,
-            lifted.getMap(),
-            lifted.getMap()->begin());
+        rewriter.moveOpBefore(source, lifted.getMap(), lifted.getMap()->end());
         for (auto [i, idx] : llvm::enumerate(indices))
             rewriter.replaceUsesWithIf(
                 idx,
@@ -505,39 +518,53 @@ struct LiftReduce : OpRewritePattern<ReduceOp> {
                 });
 
         rewriter.moveOpAfter(reduce, source);
-        rewriter.setInsertionPointToEnd(lifted.getMap());
-        rewriter.create<YieldOp>(reduce.getLoc(), reduce.getResult());
+        rewriter.setInsertionPointAfter(reduce);
+        rewriter.create<YieldOp>(reduce.getLoc(), reduce);
         return success();
     }
 };
 
 } // namespace
 
-void mlir::ekl::populateLiftPatterns(RewritePatternSet &patterns)
-{
-    populateHoistPatterns(patterns);
-
-    patterns.add<SplitReduction>(patterns.getContext());
-
-    patterns.add<LiftFactor, DistributeFactor>(patterns.getContext());
-
-    patterns.add<LiftAssoc, LiftReduce>(patterns.getContext());
-}
-
 //===----------------------------------------------------------------------===//
 // LiftPass implementation
 //===----------------------------------------------------------------------===//
 
+static LogicalResult factorize(Operation *op)
+{
+    RewritePatternSet patterns(op->getContext());
+
+    populateHoistPatterns(patterns);
+    patterns.add<SplitReduction, LiftFactor, DistributeFactor>(
+        patterns.getContext());
+
+    return applyPatternsGreedily(
+        op,
+        FrozenRewritePatternSet(std::move(patterns)));
+}
+
+static LogicalResult lift(Operation *op)
+{
+    RewritePatternSet patterns(op->getContext());
+
+    patterns.add<LiftAssoc, LiftReduce>(patterns.getContext());
+
+    return applyPatternsGreedily(
+        op,
+        FrozenRewritePatternSet(std::move(patterns)));
+}
+
 void LiftPass::runOnOperation()
 {
-    RewritePatternSet patterns(&getContext());
-
-    populateLiftPatterns(patterns);
-
-    if (failed(applyPatternsGreedily(
-            getOperation(),
-            FrozenRewritePatternSet(std::move(patterns)))))
+    if (failed(factorize(getOperation()))) {
         signalPassFailure();
+        return;
+    }
+
+    if (failed(lift(getOperation()))) {
+        signalPassFailure();
+        return;
+    }
 }
 
 std::unique_ptr<Pass> mlir::ekl::createLiftPass()
