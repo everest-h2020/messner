@@ -25,7 +25,9 @@
 #include <llvm/Target/TargetOptions.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h>
 #include <mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h>
+#include <mlir/Conversion/SCFToOpenMP/SCFToOpenMP.h>
 #include <mlir/Dialect/Bufferization/IR/Bufferization.h>
+#include <mlir/Dialect/Bufferization/Transforms/Passes.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlow.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/Linalg/IR/Linalg.h>
@@ -140,7 +142,8 @@ enum class OutputStage {
     Implemented,
     Lowered,
     Buffered,
-    Compiled,
+    Converted,
+    LLVM,
     Assembled
 };
 
@@ -152,10 +155,16 @@ static llvm::cl::opt<OutputStage> outputStage(
         clEnumValN(OutputStage::Implemented, "impl",   "Implement within EKL"),
         clEnumValN(OutputStage::Lowered,     "lower",  "Lower to standard dialects"),
         clEnumValN(OutputStage::Buffered,    "buffer", "Bufferize tensor operations"),
-        clEnumValN(OutputStage::Compiled,    "S",      "Output LLVM assembly"),
+        clEnumValN(OutputStage::Converted,   "convert", "Before LLVM conversion"),
+        clEnumValN(OutputStage::LLVM,        "S",      "Output LLVM assembly"),
         clEnumValN(OutputStage::Assembled,   "c",      "Output object file")),
     llvm::cl::init(OutputStage::Assembled));
 // clang-format on
+
+static llvm::cl::opt<bool> useOpenMP(
+    "omp",
+    llvm::cl::desc("Enable OpenMP lowering"),
+    llvm::cl::init(false));
 
 OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
 {
@@ -221,18 +230,28 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
         passManager.addPass(createCanonicalizerPass());
     }
 
-    if (outputStage >= OutputStage::Compiled) {
-        // -convert-linalg-to-loops
-        passManager.addPass(createConvertLinalgToLoopsPass());
-        // -buffer-loop-hoisting -buffer-hoosting -buffer-deallocation
+    if (outputStage >= OutputStage::Converted) {
+        if (useOpenMP) {
+            // -convert-linalg-to-parallel-loops
+            passManager.addPass(createConvertLinalgToParallelLoopsPass());
+            // -convert-scf-to-openmp
+            passManager.addPass(createConvertSCFToOpenMPPass());
+        } else {
+            // -convert-linalg-to-loops
+            passManager.addPass(createConvertLinalgToLoopsPass());
+        }
+
+        // -buffer-loop-hoisting -buffer-hoosting -promote-buffers-to-stack
+        // -buffer-deallocation
         passManager.addPass(bufferization::createBufferLoopHoistingPass());
         passManager.addPass(bufferization::createBufferHoistingPass());
+        passManager.addPass(bufferization::createPromoteBuffersToStackPass());
         passManager.addPass(bufferization::createBufferDeallocationPass());
         // -expand-strided-metadata -finalize-memref-to-llvm -lower-affine
         passManager.addPass(memref::createExpandStridedMetadataPass());
         passManager.addPass(createFinalizeMemRefToLLVMConversionPass());
         passManager.addPass(createLowerAffinePass());
-        // -convert-scf-to-cf
+        // -convert-scf-to-cf -convert-arith-to-llvm
         passManager.addPass(createConvertSCFToCFPass());
         // -convert-func-to-llvm="use-bare-ptr-memref-call-conv=1"
         ConvertFuncToLLVMPassOptions funcToLLVMOptions{true, 64};
@@ -241,10 +260,15 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
         passManager.addPass(createReconcileUnrealizedCastsPass());
         passManager.addPass(createCSEPass());
         passManager.addPass(createCanonicalizerPass());
+    }
+
+    if (outputStage >= OutputStage::LLVM) {
         // -convert-to-llvm
         passManager.addPass(createConvertToLLVMPass());
-        // -reconcile-unrealized-casts
+        // -reconcile-unrealized-casts -cse -canonicalize
         passManager.addPass(createReconcileUnrealizedCastsPass());
+        passManager.addPass(createCSEPass());
+        passManager.addPass(createCanonicalizerPass());
     }
 
     // Run the pass manager on the module.
@@ -280,7 +304,7 @@ LogicalResult runOnInput(
     auto module = runOnInput(std::move(program));
     if (!module) return failure();
 
-    if (outputStage < OutputStage::Compiled) {
+    if (outputStage < OutputStage::LLVM) {
         // Print the MLIR.
         mlir::AsmState state(*module);
         module->print(output, state);

@@ -8,6 +8,7 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/InitAllDialects.h"
+#include "mlir/InitAllExtensions.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -27,6 +28,7 @@ int main(int argc, char *argv[])
 
 #ifndef NDEBUG
     registerAllDialects(registry);
+    registerAllExtensions(registry);
     registerAllPasses();
 #endif
     // TODO: Register dialects and passes.
