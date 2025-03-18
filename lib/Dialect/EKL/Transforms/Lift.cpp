@@ -31,6 +31,7 @@
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/Visitors.h>
+#include <mlir/Rewrite/FrozenRewritePatternSet.h>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -381,9 +382,10 @@ prepareLiftAssoc(AssocOp assoc, SmallVectorImpl<BlockArgument> &indices)
     if (top == assoc) return failure();
 
     const auto numIndices = indices.size();
-    llvm::remove_if(indices, [&](BlockArgument arg) {
+    const auto removed    = llvm::remove_if(indices, [&](BlockArgument arg) {
         return !usedIndices.contains(arg);
     });
+    indices.erase(removed, indices.end());
     std::reverse(indices.begin(), indices.end());
 
     return std::make_pair(top, indices.size() < numIndices);
@@ -410,39 +412,34 @@ struct LiftAssoc : OpRewritePattern<AssocOp> {
 
         const auto arrayTy = llvm::cast<ArrayType>(getTypeBound(op.getType()));
         SmallVector<extent_t> extents;
+        unsigned insertIndex = 0;
         for (auto arg : indices) {
             const auto indexTy =
                 llvm::dyn_cast<ekl::IndexType>(getTypeBound(arg));
             if (!indexTy) return failure();
+
             extents.push_back(indexTy.getUpperBound() + 1U);
+            auto newArg = op.getMap()->insertArgument(
+                insertIndex++,
+                arg.getType(),
+                arg.getLoc());
+            rewriter.replaceUsesWithIf(arg, newArg, [&](OpOperand &opd) {
+                return op->isAncestor(opd.getOwner());
+            });
         }
         concat(extents, arrayTy.getExtents());
 
-        rewriter.setInsertionPoint(maybeResult->first);
-        auto lifted = rewriter.create<AssocOp>(
-            op.getLoc(),
-            ArrayType::get(arrayTy.getScalarType(), extents));
-        lifted->setAttr("ekl.lifted", UnitAttr::get(getContext()));
-
-        rewriter.setInsertionPointAfter(op);
         auto subscript = rewriter.create<SubscriptOp>(
             op.getLoc(),
-            lifted.getResult(),
+            op,
             ValueRange(indices),
-            getTypeBound(op.getType()));
-        rewriter.replaceAllUsesWith(op.getResult(), subscript.getResult());
+            arrayTy);
+        rewriter.replaceAllUsesExcept(op, subscript, subscript);
 
-        rewriter.moveOpBefore(op, lifted.getMap(), lifted.getMap()->begin());
-        for (auto [i, idx] : llvm::enumerate(indices))
-            rewriter.replaceUsesWithIf(
-                idx,
-                lifted.getMap()->getArgument(i),
-                [&](OpOperand &use) {
-                    return lifted->isAncestor(use.getOwner());
-                });
-
-        rewriter.setInsertionPointToEnd(lifted.getMap());
-        rewriter.create<YieldOp>(op.getLoc(), op.getResult());
+        rewriter.moveOpBefore(op, maybeResult->first);
+        // op->setAttr("ekl.lifted", UnitAttr::get(getContext()));
+        op.getResult().setType(
+            ExpressionType::get(getContext(), arrayTy.cloneWith(extents)));
         return success();
     }
 };
@@ -490,6 +487,12 @@ struct LiftReduce : OpRewritePattern<ReduceOp> {
             llvm::cast<ScalarType>(getTypeBound(reduce.getType()));
         SmallVector<extent_t> extents;
         for (auto arg : indices) {
+            LLVM_DEBUG(llvm::dbgs() << "[LiftReduce] use index: ";
+                       arg.getOwner()->getParentOp()->print(
+                           llvm::dbgs(),
+                           OpPrintingFlags().skipRegions());
+                       llvm::dbgs() << " arg #" << arg.getArgNumber();
+                       llvm::dbgs() << "\n";);
             const auto indexTy =
                 llvm::dyn_cast<ekl::IndexType>(getTypeBound(arg));
             if (!indexTy) return failure();
@@ -500,7 +503,7 @@ struct LiftReduce : OpRewritePattern<ReduceOp> {
         auto lifted = rewriter.create<AssocOp>(
             reduce.getLoc(),
             ArrayType::get(scalarTy, extents));
-        lifted->setAttr("ekl.lifted", UnitAttr::get(getContext()));
+        lifted->setAttr("ekl.lifted", UnitAttr::get(rewriter.getContext()));
 
         rewriter.setInsertionPointAfter(reduce);
         auto subscript = rewriter.create<SubscriptOp>(
@@ -549,7 +552,7 @@ static LogicalResult lift(Operation *op)
 {
     RewritePatternSet patterns(op->getContext());
 
-    patterns.add<LiftAssoc, LiftReduce>(patterns.getContext());
+    patterns.add</*LiftAssoc,*/ LiftReduce>(patterns.getContext());
 
     return applyPatternsGreedily(
         op,
