@@ -485,43 +485,48 @@ private:
 
         const auto tensorTy = llvm::cast<RankedTensorType>(
             getTypeConverter()->convertType(op.getType()));
-        auto generate = rewriter.create<tensor::GenerateOp>(
+
+        auto init = rewriter.create<tensor::EmptyOp>(
             op.getLoc(),
             tensorTy,
             ValueRange{});
+        rewriter.replaceOpWithNewOp<linalg::MapOp>(
+            op,
+            ValueRange{},
+            init.getResult(),
+            [&](OpBuilder &builder, Location loc, ValueRange) {
+                SmallVector<Value> args;
+                for (auto arg : op.getMap()->getArguments()) {
+                    auto index = builder.create<linalg::IndexOp>(
+                        arg.getLoc(),
+                        arg.getArgNumber());
+                    auto cast = createUnrealizedCast(
+                        rewriter,
+                        getTypeBound(arg.getType()),
+                        ValueRange{index},
+                        arg.getLoc());
+                    args.push_back(
+                        rewriter.create<ekl::IntroOp>(arg.getLoc(), cast)
+                            .getResult());
+                }
 
-        auto &body = generate.getBody().emplaceBlock();
-        rewriter.setInsertionPointToStart(&body);
-
-        SmallVector<Value> args;
-        for (auto arg : op.getMap()->getArguments()) {
-            const auto idx =
-                body.addArgument(rewriter.getIndexType(), arg.getLoc());
-            const auto cast = createUnrealizedCast(
-                rewriter,
-                getTypeBound(arg.getType()),
-                {idx},
-                arg.getLoc());
-            args.push_back(
-                rewriter.create<ekl::IntroOp>(arg.getLoc(), cast).getResult());
-        }
-        rewriter.inlineBlockBefore(op.getMap(), &body, body.end(), args);
-        rewriter.setInsertionPoint(&body.back());
-        const auto eval =
-            rewriter
-                .create<ekl::EvalOp>(
-                    body.back().getLoc(),
-                    body.back().getOperand(0),
-                    getTypeBound(body.back().getOperand(0).getType()))
-                .getResult();
-        rewriter.replaceOpWithNewOp<tensor::YieldOp>(
-            &body.back(),
-            createUnrealizedCast(
-                rewriter,
-                tensorTy.getElementType(),
-                {eval},
-                body.back().getLoc()));
-        rewriter.replaceOp(op, generate);
+                auto body = builder.getInsertionBlock();
+                rewriter
+                    .inlineBlockBefore(op.getMap(), body, body->end(), args);
+                auto yield = llvm::cast<YieldOp>(&body->back());
+                rewriter.setInsertionPointToEnd(body);
+                auto eval = rewriter.create<ekl::EvalOp>(
+                    yield.getLoc(),
+                    yield.getOperand(),
+                    getTypeBound(yield.getOperand().getType()));
+                rewriter.replaceOpWithNewOp<linalg::YieldOp>(
+                    yield,
+                    createUnrealizedCast(
+                        rewriter,
+                        tensorTy.getElementType(),
+                        ValueRange{eval},
+                        yield.getLoc()));
+            });
         return success();
     }
 };

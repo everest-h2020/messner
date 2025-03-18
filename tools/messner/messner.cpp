@@ -213,6 +213,9 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
         passManager.addPass(bufferization::createOneShotBufferizePass());
         // Magic copy elision fix.
         passManager.addPass(std::make_unique<CopyElisionPass>());
+        // -cse -canonicalize
+        passManager.addPass(createCSEPass());
+        passManager.addPass(createCanonicalizerPass());
     }
 
     if (outputStage >= OutputStage::Compiled) {
