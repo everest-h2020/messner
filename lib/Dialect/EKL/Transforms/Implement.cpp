@@ -235,6 +235,7 @@ struct InlineAssoc : OpRewritePattern<SubscriptOp> {
         if (!subexpr || !subexpr.getResult().hasOneUse()) return failure();
         if (subexpr.getMap()->getNumArguments() != op.getSubscripts().size())
             return failure();
+        if (subexpr->getAttr("ekl.lifted")) return failure();
 
         auto res = subexpr.getMap()->getTerminator()->getOperand(0);
         rewriter.eraseOp(subexpr.getMap()->getTerminator());

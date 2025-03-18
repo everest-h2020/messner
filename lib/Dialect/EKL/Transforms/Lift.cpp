@@ -422,6 +422,7 @@ struct LiftAssoc : OpRewritePattern<AssocOp> {
         auto lifted = rewriter.create<AssocOp>(
             op.getLoc(),
             ArrayType::get(arrayTy.getScalarType(), extents));
+        lifted->setAttr("ekl.lifted", UnitAttr::get(getContext()));
 
         rewriter.setInsertionPointAfter(op);
         auto subscript = rewriter.create<SubscriptOp>(
@@ -499,6 +500,7 @@ struct LiftReduce : OpRewritePattern<ReduceOp> {
         auto lifted = rewriter.create<AssocOp>(
             reduce.getLoc(),
             ArrayType::get(scalarTy, extents));
+        lifted->setAttr("ekl.lifted", UnitAttr::get(getContext()));
 
         rewriter.setInsertionPointAfter(reduce);
         auto subscript = rewriter.create<SubscriptOp>(
