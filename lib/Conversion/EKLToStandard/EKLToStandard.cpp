@@ -73,9 +73,9 @@ struct ConvertLiteral : OpConversionPattern<ekl::LiteralOp> {
                     attr.getContext(),
                     intAttr.getType().getIntOrFloatBitWidth()),
                 intAttr.getValue());
-        }
+        } else
+            assert(llvm::isa<mlir::FloatAttr>(attr));
 
-        assert(llvm::isa<mlir::FloatAttr>(attr));
         rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, attr);
         return success();
     }

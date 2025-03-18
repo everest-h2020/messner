@@ -179,7 +179,6 @@ struct ConvertChoice : OpConversionPattern<ekl::ChoiceOp> {
     {
         if (!adaptor.getSelector().getType().isSignlessInteger(1))
             return failure();
-        if (!llvm::isa<ArrayType>(getTypeBound(op.getType()))) return failure();
 
         const auto makeMemref = [&](Value operand) {
             const auto tensorTy =
@@ -196,17 +195,23 @@ struct ConvertChoice : OpConversionPattern<ekl::ChoiceOp> {
                 .getResult();
         };
 
-        const auto selected = rewriter
-                                  .create<arith::SelectOp>(
-                                      op.getLoc(),
-                                      adaptor.getSelector(),
-                                      makeMemref(adaptor.getAlternatives()[0]),
-                                      makeMemref(adaptor.getAlternatives()[1]))
-                                  .getResult();
-        rewriter.replaceOpWithNewOp<bufferization::ToTensorOp>(
-            op,
-            selected,
-            true);
+        auto operands = llvm::to_vector(adaptor.getAlternatives());
+        if (llvm::isa<ArrayType>(getTypeBound(op.getType())))
+            for (auto &opd : operands) opd = makeMemref(opd);
+
+        auto select = rewriter.create<arith::SelectOp>(
+            op.getLoc(),
+            adaptor.getSelector(),
+            operands[0],
+            operands[1]);
+
+        if (llvm::isa<ArrayType>(getTypeBound(op.getType()))) {
+            rewriter.replaceOpWithNewOp<bufferization::ToTensorOp>(
+                op,
+                select,
+                true);
+        } else
+            rewriter.replaceOp(op, select);
         return success();
     }
 };
