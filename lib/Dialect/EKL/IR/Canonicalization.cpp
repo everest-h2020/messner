@@ -31,12 +31,10 @@ using namespace mlir::ekl;
 // IntroOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult IntroOp::fold(FoldAdaptor adaptor)
+OpFoldResult IntroOp::fold(FoldAdaptor)
 {
-    // If the input value is a compatible LiteralAttr, it is materialized by the
-    // dialect. Otherwise, it will be passed along by the folder, but there is
-    // no guarantee this op will be deleted.
-    return adaptor.getValue();
+    // FIXME: This breaks conversion.
+    return {};
 }
 
 //===----------------------------------------------------------------------===//

@@ -8,6 +8,7 @@
 #include "../EKLConverter.h"
 #include "messner/Dialect/EKL/Analysis/Casting.h"
 #include "messner/Dialect/EKL/IR/EKL.h"
+#include "messner/Dialect/EKL/IR/Ops.h"
 #include "messner/Dialect/EKL/IR/TypeUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
@@ -22,9 +23,11 @@
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/LogicalResult.h>
+#include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Dialect/Index/IR/IndexAttrs.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinTypes.h>
+#include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -543,6 +546,21 @@ using ConvertRemainder = ConvertBinary<
 using ConvertPower =
     ConvertBinary<ekl::PowerOp, math::IPowIOp, math::IPowIOp, math::PowFOp>;
 
+struct ConvertEval : OpConversionPattern<EvalOp> {
+    using OpConversionPattern::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(
+        ekl::EvalOp op,
+        ekl::EvalOp::Adaptor,
+        ConversionPatternRewriter &rewriter) const final
+    {
+        auto intro = op.getExpression().getDefiningOp<IntroOp>();
+        if (!intro) return failure();
+        rewriter.replaceOp(op, intro.getOperand());
+        return success();
+    }
+};
+
 } // namespace
 
 void ConvertEKLToStandardPass::runOnOperation()
@@ -586,6 +604,8 @@ void ConvertEKLToStandardPass::runOnOperation()
         // All other ops are assumed legal.
         return true;
     });
+    target.addDynamicallyLegalOp<ekl::EvalOp>(
+        [](EvalOp op) { return !op.getExpression().getDefiningOp<IntroOp>(); });
 
     target.addLegalOp<UnrealizedConversionCastOp>();
     target.addLegalDialect<arith::ArithDialect>();
@@ -619,7 +639,8 @@ void messner::populateConvertEKLToStandardPatterns(
         ConvertMultiply,
         ConvertDivide,
         ConvertRemainder,
-        ConvertPower>(typeConverter, patterns.getContext());
+        ConvertPower,
+        ConvertEval>(typeConverter, patterns.getContext());
 }
 
 std::unique_ptr<Pass> messner::createConvertEKLToStandardPass()

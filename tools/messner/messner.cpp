@@ -204,6 +204,9 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
         // -ekl-to-std -reconcile-unrealized-casts
         passManager.addPass(messner::createConvertEKLToStandardPass());
         passManager.addPass(createReconcileUnrealizedCastsPass());
+        // -cse -canonicalize
+        passManager.addPass(createCSEPass());
+        passManager.addPass(createCanonicalizerPass());
     }
 
     if (outputStage >= OutputStage::Buffered) {
