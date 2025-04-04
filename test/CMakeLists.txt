@@ -15,8 +15,9 @@ configure_lit_site_cfg(
 )
 set(TEST_DEPENDS
     FileCheck count not
-    evp-opt
-    evp-translate
+    # messner
+    messner-opt
+    # messner-translate
 )
 
 # Create the test suite.

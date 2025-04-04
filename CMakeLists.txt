@@ -1,5 +1,5 @@
 ################################################################################
-# The
+# The messner MLIR compiler project.
 #
 # This project is licensed under the ISC License.
 # http://opensource.org/licenses/ISC
@@ -11,9 +11,8 @@ cmake_minimum_required(VERSION 3.20)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
 project(messner
-    VERSION     0.5.0
-    LANGUAGES   C CXX
-)
+    VERSION     1.0.0
+    LANGUAGES   C CXX)
 
 # Set global language standard to C++20.
 set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard to conform to")
@@ -32,13 +31,6 @@ if (${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
 else()
 	# NOTE: For messner, in-tree builds don't make sense.
 	message(FATAL_ERROR "LLVM in-tree build is not supported.")
-endif()
-
-# Fix for MLIR:
-# CMP0116: Ninja generators transform `DEPFILE`s from `add_custom_command()`
-# New in CMake 3.20. https://cmake.org/cmake/help/latest/policy/CMP0116.html
-if(POLICY CMP0116)
-    cmake_policy(SET CMP0116 OLD)
 endif()
 
 # Find MLIR.
@@ -64,19 +56,14 @@ add_definitions(${LLVM_DEFINITIONS})
 include_directories(SYSTEM ${PROJECT_BINARY_DIR}/include)
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
-add_compile_options(
-    # NOTE: C++20 warning adjustments for this project.
-    -Wall
-    -Wextra
-    -Wno-ambiguous-reversed-operator
-    # NOTE: GDB < 10.x can't handle DWARFv5 correctly.
-    # $<$<CXX_COMPILER_ID:Clang>:-fdebug-default-version=4>
-)
-
 # Add third-party and external projects.
 add_subdirectory(thirdparty)
 # NOTE: Abhorrent hack because LLVM/MLIR CMake is bad (interface targets plz)
 include_directories(SYSTEM ${THIRD_PARTY_INCLUDES})
+
+add_compile_options(
+    -Wall
+    -Wextra)
 
 add_subdirectory(include)
 add_subdirectory(lib)
