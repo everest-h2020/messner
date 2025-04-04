@@ -8,6 +8,8 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 
+#include <memory>
+
 namespace mlir::ekl {
 
 //===- Generated includes -------------------------------------------------===//
@@ -36,6 +38,11 @@ void populateHomogenizePatterns(RewritePatternSet &patterns);
 /// Constructs the ekl-homogenize pass.
 std::unique_ptr<Pass> createHomogenizePass();
 
+/// Adds the functor hoisting patterns to @p patterns .
+///
+/// @param  [in,out]    patterns    RewritePatternSet.
+void populateHoistPatterns(RewritePatternSet &patterns);
+
 /// Adds the ekl-lower patterns to @p patterns .
 ///
 /// @param  [in,out]    patterns    RewritePatternSet.
@@ -43,6 +50,17 @@ void populateLowerPatterns(RewritePatternSet &patterns);
 
 /// Construct the ekl-lower pass.
 std::unique_ptr<Pass> createLowerPass();
+
+/// Adds the ekl-implement patterns to @p patterns .
+///
+/// @param  [in,out]    patterns    RewritePatternSet.
+void populateImplementPatterns(RewritePatternSet &patterns);
+
+/// Construct the ekl-implement pass.
+std::unique_ptr<Pass> createImplementPass();
+
+/// Construct the ekl-lift pass.
+std::unique_ptr<Pass> createLiftPass();
 
 //===----------------------------------------------------------------------===//
 // Registration

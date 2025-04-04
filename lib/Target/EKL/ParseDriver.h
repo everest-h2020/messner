@@ -53,13 +53,6 @@ using ConstExpr     = Semantic<LiteralAttr>;
 using ConstExprList = SmallVector<ConstExpr>;
 using Extents       = Semantic<SmallVector<extent_t>>;
 
-template<class T>
-[[nodiscard]] static SmallVector<T> append(SmallVector<T> head, T tail)
-{
-    head.emplace_back(std::move(tail));
-    return head;
-}
-
 //===----------------------------------------------------------------------===//
 // ParseDriver
 //===----------------------------------------------------------------------===//
@@ -165,6 +158,10 @@ public:
     {
         return NameLoc::get(getLiteral(name), getLocation(loc));
     }
+    [[nodiscard]] UnknownLoc getUnknownLoc() const
+    {
+        return UnknownLoc::get(getContext());
+    }
 
 public:
     //===------------------------------------------------------------------===//
@@ -189,11 +186,11 @@ public:
         return mlir::emitError(where);
     }
 
-    LogicalResult recoverFromError();
-    LogicalResult recoverFromError(ImportLocation where, const llvm::Twine &msg)
+    LogicalResult recover();
+    LogicalResult recover(ImportLocation where, const llvm::Twine &msg)
     {
         emitError(where, msg);
-        return recoverFromError();
+        return recover();
     }
 
     [[nodiscard]] TypeExpr ensure(TypeExpr expr)
@@ -232,84 +229,117 @@ public:
     void pushScope(ImportLocation start) { m_scopes.push(start.end); }
     void popScope() { m_scopes.pop(); }
 
-    void defineType(ImportLocation nameLoc, StringRef name, Type type);
-    void defineConst(ImportLocation nameLoc, StringRef name, LiteralAttr value);
-    void defineExpr(ImportLocation nameLoc, StringRef name, Expression value);
-    LogicalResult defineArg(ImportLocation nameLoc, StringRef name, Type type);
+    void typeDef(ImportLocation nameLoc, StringRef name, TypeExpr type);
+    void constDef(ImportLocation nameLoc, StringRef name, ConstExpr value);
+    void exprDef(ImportLocation nameLoc, StringRef name, Expr value);
+    LogicalResult argDecl(ImportLocation loc, StringRef name, TypeExpr type);
 
-    FailureOr<Type> resolveType(ImportLocation nameLoc, StringRef name);
-    FailureOr<LiteralAttr> resolveConst(ImportLocation nameLoc, StringRef name);
-    FailureOr<Expression> resolveExpr(ImportLocation nameLoc, StringRef name);
+    FailureOr<TypeExpr> resolveType(ImportLocation loc, StringRef name);
+    FailureOr<Expr> resolveExpr(ImportLocation loc, StringRef name);
 
 public:
     //===------------------------------------------------------------------===//
     // Operation factories
     //===------------------------------------------------------------------===//
 
-    LogicalResult declareStatic(
-        ImportLocation nameLoc,
+    LogicalResult staticDecl(
+        ImportLocation loc,
         AccessModifier access,
         StringRef name,
         TypeExpr type,
         ekl::ArrayAttr init = {});
 
-    LogicalResult beginKernel(ImportLocation nameLoc, StringRef name);
-    void beginIf(ImportLocation introLoc, Expr cond, bool withResult = false);
-    void beginElse();
-    void beginElse(Expr trueValue)
-    {
-        create<YieldOp>(trueValue.getLoc(), trueValue);
-        beginElse();
-    }
-    void beginAssoc(ImportLocation introLoc);
-    void beginZip(ImportLocation introLoc, ArrayRef<Expr> exprs);
-
-    template<class T = Operation *>
-    T end()
-    {
-        return llvm::cast<T>(endImpl());
-    }
-    template<class T = Operation *>
-    Expression yieldAndEnd(Expr expr)
-    {
-        create<YieldOp>(expr.getLoc(), expr);
-        return llvm::cast<Expression>(end<T>()->getResult(0));
-    }
-
-    void write(ImportLocation loc, Expr reference, Expr value)
-    {
-        create<WriteOp>(loc, reference, value);
-    }
-    LogicalResult write(
-        ImportLocation opLoc,
+    LogicalResult outStmt(
+        ImportLocation loc,
         ImportLocation nameLoc,
         StringRef name,
         Expr value);
 
-    template<class Op>
-    Expression expr(ImportLocation opLoc, auto &&...args)
+    LogicalResult beginKernel(ImportLocation nameLoc, StringRef name);
+    void endKernel() { end<KernelOp>(); }
+
+    void beginAssoc();
+    Expr endAssoc(ImportLocation loc, Expr yield)
     {
-        return llvm::cast<Expression>(
-            create<Op>(opLoc, std::forward<decltype(args)>(args)...)
-                ->getResult(0));
+        getOp()->setLoc(getLocation(loc));
+        return {yieldAndEnd<AssocOp>(yield), loc};
     }
 
-    FailureOr<Expression>
-    call(ImportLocation nameLoc, StringRef name, ArrayRef<Expr> arguments);
+    Expr reduce(ImportLocation loc, StringRef op, Expr array)
+    {
+        return expr<ReduceOp>(
+            loc,
+            array,
+            getFunctorBuilder(
+                OperationName(op, getContext()),
+                getLocation(loc)));
+    }
+    void beginReduce(Expr array, Expr init);
+    Expr endReduce(ImportLocation loc, Expr yield)
+    {
+        getOp()->setLoc(getLocation(loc));
+        return {yieldAndEnd<ReduceOp>(yield), loc};
+    }
+
+    void beginZip(ArrayRef<Expr> operands);
+    Expr endZip(ImportLocation loc, Expr yield)
+    {
+        getOp()->setLoc(getLocation(loc));
+        return {yieldAndEnd<ZipOp>(yield), loc};
+    }
+
+    void beginIf(Expr condition);
+    void beginElse(Expr trueValue)
+    {
+        create<YieldOp>(trueValue.getLoc(), trueValue);
+        m_builder.setInsertionPointToStart(getOp<IfOp>().getElseBranch());
+    }
+    Expr endElse(ImportLocation loc, Expr falseValue)
+    {
+        getOp()->setLoc(getLocation(loc));
+        return {yieldAndEnd<IfOp>(falseValue), loc};
+    }
+
+    template<class Op>
+    Expr expr(ImportLocation loc, auto &&...args)
+    {
+        return {
+            llvm::cast<Expression>(
+                create<Op>(loc, std::forward<decltype(args)>(args)...)
+                    ->getResult(0)),
+            loc};
+    }
+
+    FailureOr<Expr> call(
+        ImportLocation loc,
+        ImportLocation nameLoc,
+        StringRef name,
+        ArrayRef<Expr> arguments);
+
+public:
+    //===------------------------------------------------------------------===//
+    // Type expressions
+    //===------------------------------------------------------------------===//
+
+    FailureOr<TypeExpr>
+    refType(ImportLocation loc, ReferenceKind kind, TypeExpr pointee);
+    FailureOr<TypeExpr> typeCtor(
+        ImportLocation loc,
+        ImportLocation nameLoc,
+        StringRef name,
+        ArrayRef<ConstExpr> params);
+    FailureOr<TypeExpr>
+    arrayType(ImportLocation loc, TypeExpr scalar, Extents extents);
 
 public:
     //===------------------------------------------------------------------===//
     // Constant expressions
     //===------------------------------------------------------------------===//
 
-    void beginConstexpr(ImportLocation introLoc);
-    FailureOr<LiteralAttr> evalConstexpr(Expr expr);
+    void beginConstexpr();
+    FailureOr<ConstExpr> endConstexpr(Expr expr);
 
-    FailureOr<SmallVector<extent_t>> extents(ArrayRef<ConstExpr> exprs);
-
-    FailureOr<ReferenceType>
-    referenceType(ReferenceKind kind, TypeExpr pointee);
-    FailureOr<ArrayType> arrayType(TypeExpr scalar, Extents extents);
+    FailureOr<Extents> extents(ImportLocation loc, ArrayRef<ConstExpr> exprs);
 
 private:
     Scope &getFileScope() { return m_scopes.back(); }
@@ -321,9 +351,21 @@ private:
     }
 
     Operation *endImpl();
+    template<class Op = Operation *>
+    Op end()
+    {
+        return llvm::cast<Op>(endImpl());
+    }
+    template<class Op = Operation *>
+    Expression yieldAndEnd(Expr expr)
+    {
+        create<YieldOp>(expr.getLoc(), expr);
+        auto op = end<Op>();
+        return llvm::cast<Expression>(op->getResult(0));
+    }
 
     template<class Op>
-    Op create(ImportLocation opLoc, auto &&...args)
+    Op create(ImportLocation loc, auto &&...args)
     {
         const auto mapArg = [&](auto &&arg) -> decltype(auto) {
             using arg_t = std::decay_t<decltype(arg)>;
@@ -345,16 +387,17 @@ private:
         };
 
         return m_builder.create<Op>(
-            getLocation(opLoc),
+            getLocation(loc),
             mapArg(std::forward<decltype(args)>(args))...);
     }
 
     SmallVector<Value> unpack(ArrayRef<Expr> exprs);
 
     LogicalResult define(Shadow shadow, Definition def);
+    const Definition *lookup(StringRef name);
+    std::optional<Definition> lookupBuiltin(StringRef name);
     FailureOr<const Definition *>
     resolve(ImportLocation nameLoc, StringRef name);
-    std::optional<Definition> resolveBuiltin(StringRef name);
 
     std::shared_ptr<llvm::SourceMgr> m_sourceMgr;
     StringAttr m_filename;

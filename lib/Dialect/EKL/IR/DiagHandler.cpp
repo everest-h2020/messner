@@ -10,6 +10,8 @@
 
 #include "llvm/Support/SourceMgr.h"
 
+#include <llvm/Support/SMLoc.h>
+
 using namespace mlir;
 using namespace mlir::ekl;
 
@@ -148,7 +150,8 @@ static void emit(
     llvm::SMRange loc,
     const llvm::Twine &msg)
 {
-    ArrayRef<llvm::SMRange> ranges = {loc};
+    llvm::SMRange rangesArray[]    = {loc};
+    ArrayRef<llvm::SMRange> ranges = rangesArray;
     if (loc.Start == loc.End) ranges = {};
 
     sourceMgr.PrintMessage(loc.Start, getDiagKind(severity), msg, ranges);

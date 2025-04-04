@@ -70,7 +70,7 @@ FailureOr<extent_t> flatten(ExtentRange extents);
 ///
 /// @param  [in,out]    lhs Prefix and result.
 /// @param              rhs Suffix.
-inline void concat(SmallVectorImpl<extent_t> &lhs, ExtentRange rhs)
+inline void concat(llvm::SmallVectorImpl<extent_t> &lhs, ExtentRange rhs)
 {
     const auto offset = lhs.size();
     lhs.resize_for_overwrite(offset + rhs.size());
@@ -83,9 +83,9 @@ inline void concat(SmallVectorImpl<extent_t> &lhs, ExtentRange rhs)
 /// @param              rhs Suffix.
 ///
 /// @return A sequence of @p lhs and @p rhs .
-inline SmallVector<extent_t> concat(ExtentRange lhs, ExtentRange rhs)
+inline llvm::SmallVector<extent_t> concat(ExtentRange lhs, ExtentRange rhs)
 {
-    SmallVector<extent_t> result;
+    llvm::SmallVector<extent_t> result;
     result.resize_for_overwrite(lhs.size() + rhs.size());
     std::copy(
         rhs.begin(),
@@ -122,6 +122,6 @@ inline FailureOr<extent_t> broadcast(extent_t lhs, extent_t rhs)
 ///
 /// @retval failure     @p lhs and @p rhs are not broadcast-compatible.
 /// @retval success     @p lhs contains the broadcasted result.
-LogicalResult broadcast(SmallVectorImpl<extent_t> &lhs, ExtentRange rhs);
+LogicalResult broadcast(llvm::SmallVectorImpl<extent_t> &lhs, ExtentRange rhs);
 
 } // namespace mlir::ekl

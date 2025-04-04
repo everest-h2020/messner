@@ -27,9 +27,7 @@ class OptionalEnumParameter<EnumAttrInfo enumInfo, EnumAttrCaseInfo default>
 def EKL_InReference    : I64BitEnumAttrCaseBit<"In", 0, "in">;
 def EKL_OutReference   : I64BitEnumAttrCaseBit<"Out", 1, "out">;
 def EKL_InOutReference : I64BitEnumAttrCaseGroup<
-        "InOut",
-        [EKL_InReference, EKL_OutReference],
-        "inout">;
+        "InOut", [EKL_InReference, EKL_OutReference], "inout">;
 
 def EKL_ReferenceKind : I64BitEnumAttr<
         "ReferenceKind",
@@ -47,12 +45,15 @@ def EKL_ReferenceKind : I64BitEnumAttr<
 // RelationKind
 //===----------------------------------------------------------------------===//
 
-def EKL_Equivalent     : I64BitEnumAttrCase<"Equivalent",     0b001, "eq">;
-def EKL_LessThan       : I64BitEnumAttrCase<"LessThan",       0b010, "lt">;
-def EKL_LessOrEqual    : I64BitEnumAttrCase<"LessOrEqual",    0b011, "le">;
-def EKL_GreaterThan    : I64BitEnumAttrCase<"GreaterThan",    0b100, "gt">;
-def EKL_GreaterOrEqual : I64BitEnumAttrCase<"GreaterOrEqual", 0b101, "ge">;
-def EKL_Antivalent     : I64BitEnumAttrCase<"Antivalent",     0b110, "ne">;
+def EKL_Equivalent     : I64BitEnumAttrCaseBit<"Equivalent",    0, "eq">;
+def EKL_LessThan       : I64BitEnumAttrCaseBit<"LessThan",      1, "lt">;
+def EKL_GreaterThan    : I64BitEnumAttrCaseBit<"GreaterThan",   2, "gt">;
+def EKL_LessOrEqual    : I64BitEnumAttrCaseGroup<
+        "LessOrEqual",    [EKL_LessThan, EKL_Equivalent],    "le">;
+def EKL_GreaterOrEqual : I64BitEnumAttrCaseGroup<
+        "GreaterOrEqual", [EKL_GreaterThan, EKL_Equivalent], "ge">;
+def EKL_Antivalent     : I64BitEnumAttrCaseGroup<
+        "Antivalent",     [EKL_LessThan, EKL_GreaterThan],   "ne">;
 
 def EKL_RelationKind : I64BitEnumAttr<
         "RelationKind",
@@ -65,6 +66,8 @@ def EKL_RelationKind : I64BitEnumAttr<
             EKL_GreaterOrEqual,
             EKL_Antivalent]> {
     let cppNamespace = "::mlir::ekl";
+
+    let printBitEnumPrimaryGroups = 1;
 }
 
 #endif

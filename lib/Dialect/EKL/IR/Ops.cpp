@@ -5,14 +5,16 @@
 
 #include "messner/Dialect/EKL/IR/Ops.h"
 
-#include "messner/Dialect/EKL/IR/EKL.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/OpImplementation.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "messner/Dialect/EKL/Analysis/AbstractTypeChecker.h"
+#include "messner/Dialect/EKL/Analysis/TypeCheckingAdaptor.h"
+#include "messner/Dialect/EKL/IR/Attributes.h"
+#include "messner/Dialect/EKL/IR/Types.h"
 
 #include <algorithm>
-#include <bit>
+#include <llvm/ADT/TypeSwitch.h>
+#include <llvm/Support/Casting.h>
+#include <mlir/IR/OpDefinition.h>
+#include <mlir/IR/OpImplementation.h>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -434,14 +436,6 @@ LogicalResult ProgramOp::verifyRegions()
 // IntroOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult IntroOp::fold(IntroOp::FoldAdaptor adaptor)
-{
-    // If the input value is a compatible LiteralAttr, it is materialized by the
-    // dialect. Otherwise, it will be passed along by the folder, but there is
-    // no guarantee this op will be deleted.
-    return adaptor.getValue();
-}
-
 bool IntroOp::areCastCompatible(TypeRange inputs, TypeRange outputs)
 {
     const auto in  = inputs.front();
@@ -467,16 +461,6 @@ LogicalResult IntroOp::inferReturnTypes(
 //===----------------------------------------------------------------------===//
 // EvalOp implementation
 //===----------------------------------------------------------------------===//
-
-OpFoldResult EvalOp::fold(EvalOp::FoldAdaptor adaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    // Since the result type of the op is not an ExpressionType, the dialect
-    // constant materializer will not be able to materialize any attribute
-    // returned by this operation.
-    return adaptor.getExpression();
-}
 
 Speculation::Speculatability EvalOp::getSpeculatability()
 {
@@ -561,7 +545,7 @@ LogicalResult StaticOp::verify()
             << getType();
     }
 
-    if (const auto initializer = getInitializerAttr()) {
+    if (const auto initializer = getInitializerAttr(); initializer) {
         // If an initializer was provided, it must be valid.
         if (!isOwned())
             return emitOpError() << "can't initialize imported value";
@@ -581,17 +565,6 @@ LogicalResult StaticOp::verify()
     if (isOwned() && isReadable())
         return emitOpError() << "readable local variable must be initialized";
 
-    return success();
-}
-
-LogicalResult StaticOp::canonicalize(StaticOp op, PatternRewriter &rewriter)
-{
-    // Remove the initializer attribute of a write-only local variable.
-    if (!op.getInitializerAttr() || op.isPublic() || !op.isOwned()
-        || op.isReadable())
-        return failure();
-
-    rewriter.updateRootInPlace(op, [&]() { op.removeInitializerAttr(); });
     return success();
 }
 
@@ -686,11 +659,18 @@ LogicalResult WriteOp::typeCheck(AbstractTypeChecker &typeChecker)
             adaptor.require(getReference(), refTy, "writable reference"))
         return contra;
 
-    // The second operand must be a value that is assignable to that reference.
-    Type valueTy;
+    // The value operand must broadcast to the reference extents.
+    ArrayType storeTy;
     if (auto contra =
-            adaptor.require(getValue(), refTy.getArrayType(), valueTy))
+            adaptor.broadcast(getValue(), refTy.getExtents(), storeTy))
         return contra;
+
+    // The broadcasted type must be a subtype of the reference array type.
+    if (!isSubtype(storeTy, refTy.getArrayType())) {
+        auto diag = emitOpError() << "can't store value of type " << storeTy
+                                  << " in a " << refTy;
+        return diag;
+    }
 
     // There are no results to this operation.
     return success();
@@ -890,29 +870,19 @@ LogicalResult GetStaticOp::typeCheck(AbstractTypeChecker &)
 // SubscriptOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult SubscriptOp::fold(SubscriptOp::FoldAdaptor adaptor)
+Speculation::Speculatability SubscriptOp::getSpeculatability()
 {
-    if (!isSpeculatable(*this)) return {};
+    const auto isSpeculatable = [](Type type) {
+        const auto bound = getTypeBound(type);
+        if (!bound) return false;
+        if (const auto indexTy = llvm::dyn_cast<ekl::IndexType>(bound); indexTy)
+            return !indexTy.isUnbounded();
+        return llvm::isa<ExtentType>(bound);
+    };
 
-    // Must have constant array.
-    const auto array =
-        llvm::dyn_cast_if_present<ekl::ArrayAttr>(adaptor.getArray());
-    if (!array) return {};
-
-    const auto bounds = array.getType().getExtents();
-    if (adaptor.getSubscripts().size() > bounds.size()) return {};
-
-    // Must be constant index values only.
-    SmallVector<extent_t> indices;
-    for (auto [attr, bound] :
-         llvm::zip_first(adaptor.getSubscripts(), bounds)) {
-        const auto indexAttr = llvm::dyn_cast_if_present<ekl::IndexAttr>(attr);
-        if (!indexAttr || indexAttr.getValue() >= bound) return {};
-        indices.push_back(indexAttr.getValue());
-    }
-
-    // Perform the subscript operation.
-    return array.subscript(indices);
+    return llvm::all_of(getSubscripts().getTypes(), isSpeculatable)
+             ? Speculation::Speculatable
+             : Speculation::NotSpeculatable;
 }
 
 [[nodiscard]] static BlockArgument getInferrableIndex(Value value)
@@ -1013,26 +983,11 @@ LogicalResult SubscriptOp::typeCheck(AbstractTypeChecker &typeChecker)
     SmallVector<uint64_t> extents;
     for (auto [idx, value] : llvm::enumerate(getSubscripts())) {
         auto bound = subscriptTys[idx];
-        if (!bound) {
-            const auto index = getInferrableIndex(value);
-            assert(index);
-
-            // The subscript type checker let this through because it can be
-            // inferred from the array extents here.
-            const auto meet = meetIndexBound(
-                typeChecker,
-                index,
-                arrayTy.getExtent(sourceDim) - 1UL);
-            if (failed(meet)) return failure();
-            bound = *meet;
-            assert(bound);
-        }
-        if (llvm::isa<ExtentType>(bound)) {
+        if (llvm::isa_and_present<ExtentType>(bound)) {
             // Insert a new unit dimension.
             extents.push_back(1UL);
             continue;
-        }
-        if (llvm::isa<EllipsisType>(bound)) {
+        } else if (llvm::isa_and_present<EllipsisType>(bound)) {
             // Count the number of remaining subscripts that will bind to a
             // source dimension.
             const auto remaining = static_cast<size_t>(llvm::count_if(
@@ -1053,7 +1008,21 @@ LogicalResult SubscriptOp::typeCheck(AbstractTypeChecker &typeChecker)
             diag.attachNote(value.getLoc()) << "with this subscript";
             return diag;
         }
-        if (llvm::isa<IdentityType>(bound)) {
+
+        if (!bound) {
+            const auto index = getInferrableIndex(value);
+            assert(index);
+
+            // The subscript type checker let this through because it can be
+            // inferred from the array extents here.
+            const auto meet = meetIndexBound(
+                typeChecker,
+                index,
+                arrayTy.getExtent(sourceDim) - 1UL);
+            if (failed(meet)) return failure();
+            bound = *meet;
+            assert(bound);
+        } else if (llvm::isa<IdentityType>(bound)) {
             // Map this dimension using the identity.
             extents.push_back(arrayTy.getExtent(sourceDim++));
             continue;
@@ -1099,18 +1068,6 @@ LogicalResult StackOp::verify()
     return success();
 }
 
-OpFoldResult StackOp::fold(StackOp::FoldAdaptor adaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    const auto arrayTy =
-        llvm::dyn_cast_if_present<ArrayType>(getType().getTypeBound());
-    if (!arrayTy) return {};
-    if (llvm::count(adaptor.getOperands(), Attribute{}) > 0) return {};
-
-    return ekl::ArrayAttr::get(arrayTy, adaptor.getOperands());
-}
-
 LogicalResult StackOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
@@ -1135,7 +1092,7 @@ LogicalResult StackOp::typeCheck(AbstractTypeChecker &typeChecker)
 LogicalResult YieldOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     // When this op is invalidated, the parent should update as well.
-    if (const auto parent = (*this)->getParentOp())
+    if (const auto parent = (*this)->getParentOp(); parent)
         typeChecker.invalidate(parent);
 
     return success();
@@ -1149,12 +1106,13 @@ void AssocOp::build(
     OpBuilder &builder,
     OperationState &state,
     unsigned numExtents,
-    FunctorBuilderRef map)
+    FunctorBuilderRef map,
+    ArrayType resultBound)
 {
     const auto unboundedTy = ExpressionType::get(builder.getContext());
 
     auto &functor = state.addRegion()->emplaceBlock();
-    state.addTypes({unboundedTy});
+    state.addTypes({ExpressionType::get(builder.getContext(), resultBound)});
 
     const auto loc = builder.getUnknownLoc();
     while (numExtents-- > 0U) functor.addArgument(unboundedTy, loc);
@@ -1170,10 +1128,11 @@ void AssocOp::build(
     OpBuilder &builder,
     OperationState &state,
     ExtentRange extents,
-    FunctorBuilderRef map)
+    FunctorBuilderRef map,
+    ArrayType resultBound)
 {
     auto &functor = state.addRegion()->emplaceBlock();
-    state.addTypes({ExpressionType::get(builder.getContext())});
+    state.addTypes({ExpressionType::get(builder.getContext(), resultBound)});
 
     const auto loc = builder.getUnknownLoc();
     for (auto extent : extents)
@@ -1199,19 +1158,6 @@ void AssocOp::build(
     const auto extents = resultBound ? resultBound.getExtents() : ExtentRange{};
     build(builder, state, extents, map);
     state.types[0] = ExpressionType::get(builder.getContext(), resultBound);
-}
-
-OpFoldResult AssocOp::fold(AssocOp::FoldAdaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    // If the yielded expression was folded to a scalar, a splat can be derived.
-    const auto expr = getMapExpression();
-    ScalarAttr value;
-    if (!matchPattern(expr, m_Constant(&value))) return {};
-    return ekl::ArrayAttr::get(
-        llvm::cast<ArrayType>(getType().getTypeBound()),
-        value);
 }
 
 static Contradiction typeCheckMap(
@@ -1417,7 +1363,7 @@ LogicalResult ReduceOp::typeCheck(AbstractTypeChecker &typeChecker)
         return failure();
 
     // Refine the bound on the accumulator expression.
-    if (const auto init = getInitExpression()) {
+    if (const auto init = getInitExpression(); init) {
         // The accumulator expression must accept the initializer.
         const auto initTy = adaptor.getType(init);
         if (!initTy) return success();
@@ -1450,16 +1396,6 @@ Expression ReduceOp::getReductionExpression()
 // ConstexprOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult ConstexprOp::fold(ConstexprOp::FoldAdaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    // Fold to the constant expression value.
-    LiteralAttr literal;
-    if (matchPattern(getExpression(), m_Constant(&literal))) return literal;
-    return {};
-}
-
 LogicalResult ConstexprOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
@@ -1479,15 +1415,6 @@ Expression ConstexprOp::getExpression()
 // UnifyOp implementation
 //===----------------------------------------------------------------------===//
 
-OpFoldResult UnifyOp::fold(UnifyOp::FoldAdaptor adaptor)
-{
-    if (!isSpeculatable(*this)) return {};
-
-    // Attributes are covariant in the IR, no unification happens. The
-    // materializer will produce a LiteralOp with a different type.
-    return adaptor.getOperand();
-}
-
 LogicalResult UnifyOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
     TypeCheckingAdaptor adaptor(typeChecker, *this);
@@ -1499,22 +1426,6 @@ LogicalResult UnifyOp::typeCheck(AbstractTypeChecker &typeChecker)
 //===----------------------------------------------------------------------===//
 // BroadcastOp implementation
 //===----------------------------------------------------------------------===//
-
-OpFoldResult BroadcastOp::fold(BroadcastOp::FoldAdaptor adaptor)
-{
-    if (!isSpeculatable(*this) || !adaptor.getOperand()) return {};
-
-    const auto resultTy = llvm::cast<ArrayType>(getType().getTypeBound());
-
-    // Fold scalar-to-array broadcasts.
-    if (const auto scalar = llvm::dyn_cast<ScalarAttr>(adaptor.getOperand()))
-        return ArrayAttr::get(resultTy, {scalar});
-    // Fold array-to-array broadcasts.
-    if (const auto array = llvm::dyn_cast<ekl::ArrayAttr>(adaptor.getOperand()))
-        return array.broadcastTo(resultTy.getExtents());
-
-    return {};
-}
 
 LogicalResult BroadcastOp::typeCheck(AbstractTypeChecker &typeChecker)
 {
@@ -1585,7 +1496,8 @@ LogicalResult ChoiceOp::typeCheck(AbstractTypeChecker &typeChecker)
     unsigned minArity = 1;
     if (llvm::isa<BoolType>(choiceTy)) {
         minArity = 2;
-    } else if (const auto indexTy = llvm::dyn_cast<ekl::IndexType>(choiceTy)) {
+    } else if (const auto indexTy = llvm::dyn_cast<ekl::IndexType>(choiceTy);
+               indexTy) {
         if (!indexTy.isUnbounded()) minArity = indexTy.getUpperBound() + 1UL;
     } else {
         auto diag = emitError() << "selector must be bool or index";

@@ -4,7 +4,9 @@
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
 
 #include "messner/Dialect/EKL/IR/EKL.h"
+#include "messner/Dialect/EKL/IR/Ops.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -12,6 +14,12 @@
 #include "mlir/Transforms/LoopInvariantCodeMotionUtils.h"
 
 #include "llvm/Support/Debug.h"
+
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/Support/Casting.h>
+#include <mlir/IR/IRMapping.h>
+#include <mlir/IR/OperationSupport.h>
+#include <utility>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -94,89 +102,6 @@ private:
     }
 };
 
-struct EliminateIf : OpRewritePattern<IfOp> {
-    using OpRewritePattern<IfOp>::OpRewritePattern;
-
-    LogicalResult
-    matchAndRewrite(IfOp op, PatternRewriter &rewriter) const final
-    {
-        // Only applies to expression-style ifs.
-        if (!op.getResult())
-            return rewriter.notifyMatchFailure(op, "only applies to if-expr");
-
-        // Only applies if both branches are known to yield the same thing.
-        const auto value = op.getThenBranch()->back().getOperand(0);
-        if (value != op.getElseBranch()->back().getOperand(0))
-            return rewriter.notifyMatchFailure(
-                op,
-                "only applies to equal expressions");
-
-        // Short-circuit the result of the if.
-        rewriter.replaceAllUsesWith(op.getResult(), value);
-        return success();
-    }
-};
-
-struct DissolveIf : OpRewritePattern<IfOp> {
-    using OpRewritePattern<IfOp>::OpRewritePattern;
-
-    LogicalResult
-    matchAndRewrite(IfOp op, PatternRewriter &rewriter) const final
-    {
-        // Determine if there is a statically-known code path.
-        BoolAttr condition;
-        if (!matchPattern(op.getCondition(), m_Constant(&condition)))
-            return rewriter.notifyMatchFailure(
-                op,
-                "only applies to known conditionals");
-
-        // Inline the statically-known code path before the IfOp.
-        auto branch =
-            condition.getValue() ? op.getThenBranch() : op.getElseBranch();
-        auto yieldOp = llvm::cast<YieldOp>(branch->getTerminator());
-        rewriter.inlineBlockBefore(branch, op);
-
-        // Since the yield type may be a subtype of the result type, unify.
-        rewriter.setInsertionPoint(yieldOp);
-        const auto result = rewriter
-                                .create<UnifyOp>(
-                                    yieldOp->getLoc(),
-                                    yieldOp.getExpression(),
-                                    op.getType(0))
-                                .getResult();
-
-        // Erase the extraneous terminator and throw away the rest of the IfOp.
-        yieldOp.erase();
-        rewriter.replaceOp(op, result);
-        return success();
-    }
-};
-
-struct RewriteIfToStatement : OpRewritePattern<IfOp> {
-    using OpRewritePattern::OpRewritePattern;
-
-    LogicalResult
-    matchAndRewrite(IfOp op, PatternRewriter &rewriter) const final
-    {
-        if (!op.isExpression()) return failure();
-        if (!op.getResult().use_empty()) return failure();
-
-        auto result = rewriter.create<IfOp>(op.getLoc(), op.getCondition());
-        rewriter.inlineBlockBefore(
-            op.getThenBranch(),
-            result.getThenBranch(),
-            result.getThenBranch()->end());
-        rewriter.eraseOp(result.getThenBranch()->getTerminator());
-        rewriter.inlineBlockBefore(
-            op.getElseBranch(),
-            result.getElseBranch(),
-            result.getElseBranch()->end());
-        rewriter.eraseOp(result.getElseBranch()->getTerminator());
-        rewriter.eraseOp(op);
-        return success();
-    }
-};
-
 struct RewriteIfToChoice : OpRewritePattern<IfOp> {
     using OpRewritePattern::OpRewritePattern;
 
@@ -188,7 +113,7 @@ struct RewriteIfToChoice : OpRewritePattern<IfOp> {
         const auto trueValue   = op.getThenExpression();
         const auto falseValue  = op.getElseExpression();
         const auto definedInIf = [&](Value value) {
-            if (const auto result = llvm::cast<OpResult>(value))
+            if (const auto result = llvm::dyn_cast<OpResult>(value))
                 return op->isAncestor(result.getOwner());
             return op->isAncestor(
                 llvm::cast<BlockArgument>(value).getOwner()->getParentOp());
@@ -199,7 +124,8 @@ struct RewriteIfToChoice : OpRewritePattern<IfOp> {
                                 .create<ChoiceOp>(
                                     op.getLoc(),
                                     op.getCondition(),
-                                    ValueRange{falseValue, trueValue})
+                                    ValueRange{falseValue, trueValue},
+                                    getTypeBound(op.getResult().getType()))
                                 .getResult();
         rewriter.replaceAllUsesWith(op.getResult(), result);
         return success();
@@ -246,7 +172,7 @@ struct ExpandEllipsisSubscript : OpRewritePattern<SubscriptOp> {
         SmallVector<Value> identities(expand, identity);
 
         // Replace the single ellipsis operand with that many identity literals.
-        rewriter.updateRootInPlace(op, [&]() {
+        rewriter.modifyOpInPlace(op, [&]() {
             op->setOperands(
                 op.getSubscripts().getBeginOperandIndex(),
                 1U,
@@ -319,24 +245,6 @@ struct RewriteSubscriptToAssoc : OpRewritePattern<SubscriptOp> {
     }
 };
 
-struct DissolveZip : OpRewritePattern<ZipOp> {
-    using OpRewritePattern::OpRewritePattern;
-
-    LogicalResult
-    matchAndRewrite(ZipOp op, PatternRewriter &rewriter) const final
-    {
-        const auto resultTy =
-            llvm::dyn_cast<ScalarType>(op.getType().getTypeBound());
-        if (!resultTy) return failure();
-
-        auto yieldOp = llvm::cast<YieldOp>(op.getCombinator()->getTerminator());
-        rewriter.inlineBlockBefore(op.getCombinator(), op, op.getOperands());
-        rewriter.replaceOp(op, yieldOp.getOperand());
-        rewriter.eraseOp(yieldOp);
-        return success();
-    }
-};
-
 struct RewriteZipToAssoc : OpRewritePattern<ZipOp> {
     using OpRewritePattern::OpRewritePattern;
 
@@ -349,10 +257,16 @@ struct RewriteZipToAssoc : OpRewritePattern<ZipOp> {
 
         SmallVector<Value> newOperands(op.getOperands());
         for (auto &op : newOperands) {
-            op =
-                rewriter
-                    .create<BroadcastOp>(op.getLoc(), op, resultTy.getExtents())
-                    .getResult();
+            op = rewriter
+                     .create<BroadcastOp>(
+                         op.getLoc(),
+                         op,
+                         resultTy.getExtents(),
+                         llvm::cast<BroadcastType>(
+                             llvm::cast<ExpressionType>(op.getType())
+                                 .getTypeBound())
+                             .cloneWith(resultTy.getExtents()))
+                     .getResult();
         }
 
         rewriter.replaceOpWithNewOp<AssocOp>(
@@ -404,23 +318,105 @@ struct CollapseAssoc : OpRewritePattern<AssocOp> {
     }
 };
 
+struct ReindexAssoc : OpRewritePattern<AssocOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(AssocOp op, PatternRewriter &rewriter) const final
+    {
+        auto yieldTy = llvm::dyn_cast_if_present<ArrayType>(
+            getTypeBound(op.getMapExpression()));
+        if (!yieldTy) return failure();
+
+        SmallVector<Value> indices;
+        auto yield = llvm::cast<YieldOp>(&op.getMap()->back());
+        for (auto ext : yieldTy.getExtents()) {
+            const auto indexTy =
+                ekl::IndexType::get(rewriter.getContext(), ext - 1UL);
+            indices.push_back(op.getMap()->addArgument(
+                ExpressionType::get(rewriter.getContext(), indexTy),
+                yield->getLoc()));
+        }
+
+        rewriter.setInsertionPoint(yield);
+        const auto scalar = rewriter
+                                .create<SubscriptOp>(
+                                    yield.getLoc(),
+                                    yield.getOperand(),
+                                    indices,
+                                    yieldTy.getScalarType())
+                                .getResult();
+        rewriter.modifyOpInPlace(yield, [&]() { yield.setOperand(scalar); });
+        return success();
+    }
+};
+
+struct CollapseReduction : OpRewritePattern<ReduceOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(ReduceOp op, PatternRewriter &rewriter) const final
+    {
+        auto source = op.getArray().getDefiningOp<AssocOp>();
+        if (!source) return failure();
+        auto inner = source.getMapExpression().getDefiningOp<ReduceOp>();
+        if (!inner) return failure();
+        if (!areCompatible(op, inner)) return failure();
+
+        const auto sourceTy =
+            llvm::cast<ArrayType>(getTypeBound(source.getType()));
+        const auto innerTy =
+            llvm::cast<ArrayType>(getTypeBound(inner.getArray()));
+        assert(sourceTy.getScalarType() == innerTy.getScalarType());
+
+        const auto collapsedTy = ArrayType::get(
+            sourceTy.getScalarType(),
+            concat(sourceTy.getExtents(), innerTy.getExtents()));
+
+        const auto yield = &source.getMap()->back();
+        rewriter.modifyOpInPlace(yield, [&]() {
+            yield->setOperand(0, inner.getArray());
+        });
+        rewriter.modifyOpInPlace(source, [&]() {
+            source.getResult().setType(
+                ExpressionType::get(getContext(), collapsedTy));
+        });
+        rewriter.eraseOp(inner);
+        return success();
+    }
+
+private:
+    static bool areCompatible(ReduceOp outer, ReduceOp inner)
+    {
+        return OperationEquivalence::isRegionEquivalentTo(
+            &outer.getReductionRegion(),
+            &inner.getReductionRegion(),
+            OperationEquivalence::Flags::IgnoreLocations);
+    }
+};
+
 } // namespace
 
-void mlir::ekl::populateLowerPatterns(RewritePatternSet &patterns)
+void mlir::ekl::populateHoistPatterns(RewritePatternSet &patterns)
 {
     // Hoisting applies to all functors and is essential for other rewrites.
     patterns.add<Hoist>(patterns.getContext());
+}
 
-    patterns
-        .add<EliminateIf, DissolveIf, RewriteIfToStatement, RewriteIfToChoice>(
-            patterns.getContext());
+void mlir::ekl::populateLowerPatterns(RewritePatternSet &patterns)
+{
+    populateHoistPatterns(patterns);
+
+    patterns.add<RewriteIfToChoice>(patterns.getContext());
 
     patterns.add<ExpandEllipsisSubscript, RewriteSubscriptToAssoc>(
         patterns.getContext());
 
     patterns.add<RewriteZipToAssoc>(patterns.getContext());
 
-    patterns.add<CollapseAssoc>(patterns.getContext());
+    patterns.add<CollapseAssoc, ReindexAssoc>(patterns.getContext());
+
+    patterns.add<CollapseReduction>(patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
@@ -433,7 +429,7 @@ void LowerPass::runOnOperation()
 
     populateLowerPatterns(patterns);
 
-    if (failed(applyPatternsAndFoldGreedily(
+    if (failed(applyPatternsGreedily(
             getOperation(),
             FrozenRewritePatternSet(std::move(patterns)))))
         signalPassFailure();

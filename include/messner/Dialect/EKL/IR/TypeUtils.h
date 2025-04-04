@@ -7,13 +7,16 @@
 
 #include "messner/Dialect/EKL/IR/Types.h"
 
+#include <type_traits>
+
 namespace mlir::ekl {
 
 template<class T>
 concept type_constraint = std::is_same_v<Type, T> || std::is_base_of_v<Type, T>;
 
 template<class T>
-concept broadcast_type_constrait = std::is_same_v<BroadcastType, T> || std::is_base_of_v<BroadcastType, T>;
+concept broadcast_type_constraint =
+    std::is_same_v<BroadcastType, T> || std::is_convertible_v<T, BroadcastType>;
 
 template<class T>
 concept value_constraint =

@@ -5,6 +5,10 @@
 
 #include "ImplicitCast.h"
 #include "messner/Dialect/EKL/IR/EKL.h"
+#include "messner/Dialect/EKL/IR/Ops.h"
+#include "messner/Dialect/EKL/IR/Traits.h"
+#include "messner/Dialect/EKL/IR/TypeUtils.h"
+#include "messner/Dialect/EKL/IR/Types.h"
 #include "messner/Dialect/EKL/Transforms/TypeCheck.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
@@ -13,6 +17,9 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "llvm/Support/Debug.h"
+
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/Support/LogicalResult.h>
 
 using namespace mlir;
 using namespace mlir::ekl;
@@ -77,6 +84,24 @@ protected:
                 return success();
             });
     }
+
+    [[nodiscard]] static FailureOr<ScalarType>
+    getDecayedScalarType(Operation *op)
+    {
+        auto result = ScalarType{};
+        for (auto operand : op->getOperands()) {
+            const auto bound = getTypeBound(operand);
+            if (!bound) return failure();
+            const auto scalarTy =
+                llvm::cast<ArithmeticType>(bound).getScalarType();
+            if (llvm::isa<NumberType>(scalarTy)) {
+                if (operand.getDefiningOp<LiteralOp>()) continue;
+                return failure();
+            }
+            if (!result || isSubtype(result, scalarTy)) result = scalarTy;
+        }
+        return result;
+    }
 };
 
 struct DecayLiteralArithmetic
@@ -106,25 +131,6 @@ struct DecayLiteralArithmetic
         ok = typeChecker.check();
         assert(succeeded(ok));
         return success();
-    }
-
-private:
-    [[nodiscard]] static FailureOr<ScalarType>
-    getDecayedScalarType(Operation *op)
-    {
-        auto result = ScalarType{};
-        for (auto operand : op->getOperands()) {
-            const auto bound = getTypeBound(operand);
-            if (!bound) return failure();
-            const auto scalarTy =
-                llvm::cast<ArithmeticType>(bound).getScalarType();
-            if (llvm::isa<NumberType>(scalarTy)) {
-                if (operand.getDefiningOp<LiteralOp>()) continue;
-                return failure();
-            }
-            if (!result || isSubtype(result, scalarTy)) result = scalarTy;
-        }
-        return result;
     }
 };
 
@@ -158,12 +164,29 @@ struct DecayCoercedArithmetic
             return failure();
 
         // Replace the coersion.
-        rewriter.updateRootInPlace(op, [&]() {
+        rewriter.modifyOpInPlace(op, [&]() {
             op->getResult(0).setType(
                 ExpressionType::get(getContext(), resultTy));
         });
         rewriter.replaceOp(user, op);
         return success();
+    }
+};
+
+struct DecayRelational : OpTraitRewritePattern<ekl::OpTrait::IsRelational>,
+                         ScalarDecay {
+    using OpTraitRewritePattern<
+        ekl::OpTrait::IsRelational>::OpTraitRewritePattern;
+
+    LogicalResult
+    matchAndRewrite(Operation *op, PatternRewriter &rewriter) const final
+    {
+        // Find a scalar type to decay to.
+        const auto decayedTy = getDecayedScalarType(op);
+        if (failed(decayedTy)) return failure();
+
+        // Coerce the decayed operands.
+        return decayOperands(rewriter, op->getOperands(), *decayedTy);
     }
 };
 
@@ -174,6 +197,8 @@ void mlir::ekl::populateDecayNumberPatterns(RewritePatternSet &patterns)
     patterns.add<DecayLiteralArithmetic>(patterns.getContext());
 
     patterns.add<DecayCoercedArithmetic>(patterns.getContext());
+
+    patterns.add<DecayRelational>(patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
@@ -186,7 +211,7 @@ void DecayNumberPass::runOnOperation()
 
     populateDecayNumberPatterns(patterns);
 
-    if (failed(applyPatternsAndFoldGreedily(
+    if (failed(applyPatternsGreedily(
             getOperation(),
             FrozenRewritePatternSet(std::move(patterns)))))
         signalPassFailure();

@@ -62,20 +62,25 @@ string                      \"(\\.|[^\\"\n])*\"
 
 /*--- KEYWORDS ---------------------------------------------------------------*/
 
-"type"                      { return ParserImpl::make_KW_TYPE(location()); }
+"assoc"                     { return ParserImpl::make_KW_ASSOC(location()); }
 "const"                     { return ParserImpl::make_KW_CONST(location()); }
-"static"                    { return ParserImpl::make_KW_STATIC(location()); }
-"local"                     { return ParserImpl::make_KW_LOCAL(location()); }
-"import"                    { return ParserImpl::make_KW_IMPORT(location()); }
+"else"                      { return ParserImpl::make_KW_ELSE(location()); }
 "export"                    { return ParserImpl::make_KW_EXPORT(location()); }
+"import"                    { return ParserImpl::make_KW_IMPORT(location()); }
+"if"                        { return ParserImpl::make_KW_IF(location()); }
+"in"                        { return ParserImpl::make_KW_IN(location()); }
+"init"                      { return ParserImpl::make_KW_INIT(location()); }
+"inout"                     { return ParserImpl::make_KW_INOUT(location()); }
 "kernel"                    { return ParserImpl::make_KW_KERNEL(location()); }
 "let"                       { return ParserImpl::make_KW_LET(location()); }
-"in"                        { return ParserImpl::make_KW_IN(location()); }
+"local"                     { return ParserImpl::make_KW_LOCAL(location()); }
 "out"                       { return ParserImpl::make_KW_OUT(location()); }
-"inout"                     { return ParserImpl::make_KW_INOUT(location()); }
-"if"                        { return ParserImpl::make_KW_IF(location()); }
+"reduce"                    { return ParserImpl::make_KW_REDUCE(location()); }
+"static"                    { return ParserImpl::make_KW_STATIC(location()); }
 "then"                      { return ParserImpl::make_KW_THEN(location()); }
-"else"                      { return ParserImpl::make_KW_ELSE(location()); }
+"type"                      { return ParserImpl::make_KW_TYPE(location()); }
+"using"                     { return ParserImpl::make_KW_USING(location()); }
+"zip"                       { return ParserImpl::make_KW_ZIP(location()); }
 
 /*--- OPERATORS --------------------------------------------------------------*/
 
@@ -85,7 +90,12 @@ string                      \"(\\.|[^\\"\n])*\"
 "||"                        { return ParserImpl::make_LOR(location()); }
 "&&"                        { return ParserImpl::make_LAND(location()); }
 "=="                        { return ParserImpl::make_EQ(location()); }
-"~="                        { return ParserImpl::make_NE(location()); }
+"=+"                        { return ParserImpl::make_EQ_ADD(location()); }
+"=*"                        { return ParserImpl::make_EQ_MUL(location()); }
+"=min"                      { return ParserImpl::make_EQ_MIN(location()); }
+"=max"                      { return ParserImpl::make_EQ_MAX(location()); }
+"=>"                        { return ParserImpl::make_MAPSTO(location()); }
+"<>"                        { return ParserImpl::make_NE(location()); }
 "<="                        { return ParserImpl::make_LE(location()); }
 ">="                        { return ParserImpl::make_GE(location()); }
 
@@ -130,7 +140,7 @@ _{decdigit}+                {
 
 .                           {
     const auto loc = location();
-    if (failed(driver().recoverFromError(loc, "unknown token")))
+    if (failed(driver().recover(loc, "unknown token")))
         return ParserImpl::make_END(loc);
 }
 

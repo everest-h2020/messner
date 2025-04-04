@@ -1,0 +1,3 @@
+add_subdirectory(EKLToFunc)
+add_subdirectory(EKLToLinalg)
+add_subdirectory(EKLToStandard)

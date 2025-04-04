@@ -1,7 +1,10 @@
 add_mlir_library(EKLTransforms
         DecayNumber.cpp
         Homogenize.cpp
+        Implement.cpp
+        Lift.cpp
         Lower.cpp
+        Simplify.cpp
         TypeCheck.cpp
 
     ENABLE_AGGREGATION
