@@ -1,13 +1,11 @@
-/// Implements the Ref dialect ops.
+/// Implementation of the Ref dialect ops.
 ///
 /// @file
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
 
 #include "messner/Dialect/Ref/IR/Ops.h"
 
-#include "messner/Support/int.h"
-
-#include <mlir/Interfaces/SideEffectInterfaces.h>
+#include <mlir/IR/OpImplementation.h>
 
 using namespace mlir;
 using namespace mlir::ref;
@@ -23,23 +21,64 @@ using namespace mlir::ref;
 // ReadOp implementation
 //===----------------------------------------------------------------------===//
 
-Speculation::Speculatability ReadOp::getSpeculatability()
+void ReadOp::build(
+    OpBuilder &odsBuilder,
+    OperationState &odsState,
+    ReadableRef reference,
+    bool isImpure,
+    bool isVolatile)
 {
-    return messner::test_all(
-               getReference().getType().getKind(),
-               ReferenceKind::Pure)
-             ? Speculation::Speculatable
-             : Speculation::NotSpeculatable;
+    assert(reference);
+
+    odsState.addOperands(reference);
+    odsState.addTypes(reference.getType().getCellType());
+
+    auto &props         = odsState.getOrAddProperties<Properties>();
+    const auto unitAttr = odsBuilder.getUnitAttr();
+    props.setIsImpure(isImpure ? unitAttr : UnitAttr{});
+    props.setIsVolatile(isVolatile ? unitAttr : UnitAttr{});
 }
 
-LogicalResult ReadOp::inferReturnTypes(
+void ReadOp::getEffects(SmallVectorImpl<MemoryEffects::EffectInstance> &effects)
+{
+    const auto resource = getReference().getType().getResource();
+
+    if (isVolatile()) {
+        effects.emplace_back(
+            MemoryEffects::Write::get(),
+            &getReferenceMutable(),
+            VolatileAttr::get(getContext()),
+            0,
+            false,
+            resource);
+    }
+
+    effects.emplace_back(
+        MemoryEffects::Read::get(),
+        &getReferenceMutable(),
+        1,
+        false,
+        resource);
+
+    if (isImpure()) {
+        effects.emplace_back(
+            MemoryEffects::Write::get(),
+            &getReferenceMutable(),
+            VolatileAttr::get(getContext()),
+            2,
+            true,
+            resource);
+    }
+}
+
+auto ReadOp::inferReturnTypes(
     MLIRContext *,
     std::optional<Location>,
     ValueRange operands,
     DictionaryAttr attributes,
     OpaqueProperties properties,
     RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes)
+    SmallVectorImpl<Type> &inferredReturnTypes) -> LogicalResult
 {
     ReadOp::GenericAdaptor<ValueRange> adaptor(
         operands,
@@ -57,13 +96,45 @@ LogicalResult ReadOp::inferReturnTypes(
 // WriteOp implementation
 //===----------------------------------------------------------------------===//
 
-Speculation::Speculatability WriteOp::getSpeculatability()
+void WriteOp::build(
+    OpBuilder &odsBuilder,
+    OperationState &odsState,
+    Value value,
+    WritableRef reference,
+    bool isVolatile)
 {
-    return messner::test_all(
-               getReference().getType().getKind(),
-               ReferenceKind::Exclusive)
-             ? Speculation::Speculatable
-             : Speculation::NotSpeculatable;
+    assert(value && reference);
+    assert(value.getType() == reference.getType().getCellType());
+
+    odsState.addOperands(value);
+    odsState.addOperands(reference);
+
+    auto &props         = odsState.getOrAddProperties<Properties>();
+    const auto unitAttr = odsBuilder.getUnitAttr();
+    props.setIsVolatile(isVolatile ? unitAttr : UnitAttr{});
+}
+
+void WriteOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects)
+{
+    const auto resource = getReference().getType().getResource();
+
+    if (isVolatile()) {
+        effects.emplace_back(
+            MemoryEffects::Read::get(),
+            &getReferenceMutable(),
+            VolatileAttr::get(getContext()),
+            0,
+            true,
+            resource);
+    }
+
+    effects.emplace_back(
+        MemoryEffects::Write::get(),
+        &getReferenceMutable(),
+        1,
+        false,
+        resource);
 }
 
 //===----------------------------------------------------------------------===//

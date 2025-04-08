@@ -5,9 +5,8 @@
 
 #pragma once
 
-#include "messner/Dialect/Ref/IR/Base.h"
-
-#include <mlir/IR/Types.h>
+#include "messner/Dialect/Ref/IR/Dialect.h" // IWYU pragma: keep
+#include "messner/Dialect/Ref/Interfaces/ReferenceTypeInterface.h" // IWYU pragma: keep
 
 //===- Generated includes -------------------------------------------------===//
 
@@ -19,93 +18,19 @@
 namespace mlir::ref {
 
 //===----------------------------------------------------------------------===//
-// Named constraints
-//===----------------------------------------------------------------------===//
-
-class ReadableRefType : public ReferenceType {
-public:
-    [[nodiscard]] static bool classof(ReferenceType type);
-    [[nodiscard]] static bool classof(Type type);
-
-    using ReferenceType::ReferenceType;
-
-    [[nodiscard]] bool isReadable() const;
-};
-
-class WritableRefType : public ReferenceType {
-public:
-    [[nodiscard]] static bool classof(ReferenceType type);
-    [[nodiscard]] static bool classof(Type type);
-
-    using ReferenceType::ReferenceType;
-
-    [[nodiscard]] bool isWritable() const;
-};
-
-} // namespace mlir::ref
-
-namespace mlir::ref {
-
-//===----------------------------------------------------------------------===//
 // ReferenceType implementation
 //===----------------------------------------------------------------------===//
 
-inline bool ReferenceType::isReadable() const
-{
-    return ref::isReadable(getKind());
-}
-
-inline bool ReferenceType::isWritable() const
-{
-    return ref::isWritable(getKind());
-}
-
-inline ReferenceType ReferenceType::cloneWith(Type cellType) const
+inline auto ReferenceType::cloneWith(Type cellType) const -> ReferenceType
 {
     assert(cellType);
 
     return get(getContext(), cellType, getKind());
 }
 
-inline ReferenceType ReferenceType::cloneWith(ReferenceKind kind) const
+inline auto ReferenceType::cloneWith(ReferenceKind kind) const -> ReferenceType
 {
     return get(getContext(), getCellType(), kind);
 }
-
-//===----------------------------------------------------------------------===//
-// ReadableRefType implementation
-//===----------------------------------------------------------------------===//
-
-inline bool ReadableRefType::classof(ReferenceType type)
-{
-    return type.isReadable();
-}
-
-inline bool ReadableRefType::classof(Type type)
-{
-    if (const auto refTy = llvm::dyn_cast<ReferenceType>(type); refTy)
-        return classof(refTy);
-    return false;
-}
-
-inline bool ReadableRefType::isReadable() const { return true; }
-
-//===----------------------------------------------------------------------===//
-// WritableRefType implementation
-//===----------------------------------------------------------------------===//
-
-inline bool WritableRefType::classof(ReferenceType type)
-{
-    return type.isWritable();
-}
-
-inline bool WritableRefType::classof(Type type)
-{
-    if (const auto refTy = llvm::dyn_cast<ReferenceType>(type); refTy)
-        return classof(refTy);
-    return false;
-}
-
-inline bool WritableRefType::isWritable() const { return true; }
 
 } // namespace mlir::ref

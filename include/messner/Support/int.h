@@ -18,10 +18,12 @@
 ///   - `sext` and `sext_or_trunc` perform signed-style casts.
 ///   - `ext` performs integer promotions.
 ///   - `value_cast` performs runtime checked value-preserving casts.
+///   - `saturate` performs value saturation.
 ///
 /// Arithmetic operations:
 ///
 ///   - `cmp` performs true comparison.
+///   - `checked_*` performs checked arithmetic.
 ///
 /// Logical operations:
 ///
@@ -251,6 +253,39 @@ constexpr auto test_any(Int value, Int mask) -> bool;
 template<int_or_enum Int>
 [[nodiscard]]
 constexpr auto test_all(Int value, Int mask) -> bool;
+
+/// Computes checked negation of @p value .
+template<std::integral Int>
+[[nodiscard]]
+constexpr auto checked_neg(Int value) -> arith_result<Int>;
+/// Computes checked addition of @p lhs and @p rhs .
+template<std::integral Int, std::same_as<Int> Rhs>
+[[nodiscard]]
+constexpr auto checked_add(Int lhs, Rhs rhs) -> arith_result<Int>;
+/// Computes checked subtraction of @p lhs and @p rhs .
+template<std::integral Int, std::same_as<Int> Rhs>
+[[nodiscard]]
+constexpr auto checked_sub(Int lhs, Rhs rhs) -> arith_result<Int>;
+/// Computes checked multiplication of @p lhs and @p rhs .
+template<std::integral Int, std::same_as<Int> Rhs>
+[[nodiscard]]
+constexpr auto checked_mul(Int lhs, Rhs rhs) -> arith_result<Int>;
+/// Computes checked division (rounding towards zero) of @p lhs and @p rhs .
+template<std::integral Int, std::same_as<Int> Rhs>
+[[nodiscard]]
+constexpr auto checked_div_trunc(Int lhs, Rhs rhs) -> arith_result<Int>;
+/// Computes checked remainder (rounding towards zero) of @p lhs and @p rhs .
+template<std::integral Int, std::same_as<Int> Rhs>
+[[nodiscard]]
+constexpr auto checked_rem_trunc(Int lhs, Rhs rhs) -> arith_result<Int>;
+
+/// Saturates @p result if it is inexact, otherwise obtains the exact result.
+///
+/// If @p result is undefined, exact, or rounded, it is propagated. Otherwise,
+/// it is saturated to the nearest extremum.
+template<std::integral Int>
+[[nodiscard]]
+constexpr auto saturate(arith_result<Int> result) -> std::optional<Int>;
 
 } // namespace messner
 
@@ -649,6 +684,145 @@ constexpr auto test_all(T value, T mask) -> bool
 {
     const auto mask_bits = as_uint(mask);
     return (as_uint(value) & mask_bits) == mask_bits;
+}
+
+//===----------------------------------------------------------------------===//
+// checked_neg
+//===----------------------------------------------------------------------===//
+
+template<std::integral Int>
+constexpr auto checked_neg(Int value) -> arith_result<Int>
+{
+    if constexpr (std::is_unsigned_v<Int>) {
+        if (value > 0) return std::nullopt;
+        return arith_result<Int>(arith_quality::underflow, -value);
+    } else {
+        const auto quality = value == std::numeric_limits<Int>::min()
+                               ? arith_quality::overflow
+                               : arith_quality::exact;
+        return arith_result<Int>(quality, -value);
+    }
+}
+
+//===----------------------------------------------------------------------===//
+// checked_add
+//===----------------------------------------------------------------------===//
+
+template<std::integral Int, std::same_as<Int> Rhs>
+constexpr auto checked_add(Int lhs, Rhs rhs) -> arith_result<Int>
+{
+    auto quality = arith_quality::exact;
+    Int result;
+    if (__builtin_add_overflow(lhs, rhs, &result)) {
+        if constexpr (std::is_unsigned_v<Int>) {
+            quality = arith_quality::overflow;
+        } else {
+            quality =
+                rhs > 0 ? arith_quality::overflow : arith_quality::underflow;
+        }
+    }
+    return arith_result<Int>(quality, result);
+}
+
+//===----------------------------------------------------------------------===//
+// checked_sub
+//===----------------------------------------------------------------------===//
+
+template<std::integral Int, std::same_as<Int> Rhs>
+constexpr auto checked_sub(Int lhs, Rhs rhs) -> arith_result<Int>
+{
+    constexpr Int zero{};
+
+    auto quality = arith_quality::exact;
+    Int result;
+    if (__builtin_sub_overflow(lhs, rhs, &result)) {
+        if constexpr (std::is_unsigned_v<Int>) {
+            quality = arith_quality::underflow;
+        } else {
+            quality =
+                rhs > zero ? arith_quality::underflow : arith_quality::overflow;
+        }
+    }
+    return arith_result<Int>(quality, result);
+}
+
+//===----------------------------------------------------------------------===//
+// checked_mul
+//===----------------------------------------------------------------------===//
+
+template<std::integral Int, std::same_as<Int> Rhs>
+constexpr auto checked_mul(Int lhs, Rhs rhs) -> arith_result<Int>
+{
+    constexpr Int zero{};
+
+    auto quality = arith_quality::exact;
+    Int result;
+    if (__builtin_mul_overflow(lhs, rhs, &result)) {
+        if constexpr (std::is_unsigned_v<Int>) {
+            quality = arith_quality::overflow;
+        } else {
+            quality = (lhs < zero) == (rhs < zero) ? arith_quality::overflow
+                                                   : arith_quality::underflow;
+        }
+    }
+    return arith_result<Int>(quality, result);
+}
+
+//===----------------------------------------------------------------------===//
+// checked_div_trunc
+//===----------------------------------------------------------------------===//
+
+template<std::integral Int, std::same_as<Int> Rhs>
+constexpr auto checked_div_trunc(Int lhs, Rhs rhs) -> arith_result<Int>
+{
+    constexpr Int zero{};
+
+    if (rhs == zero) return std::nullopt;
+
+    const auto result = lhs / rhs;
+    const auto quality =
+        lhs % rhs == 0 ? arith_quality::exact : arith_quality::rounded;
+
+    if constexpr (std::is_unsigned_v<Int>) {
+        return arith_result<Int>(quality, result);
+    } else {
+        constexpr auto min = std::numeric_limits<Int>::min();
+        if (rhs == -1 && lhs == min)
+            return arith_result<Int>(arith_quality::overflow, -lhs);
+        return arith_result<Int>(quality, result);
+    }
+}
+
+//===----------------------------------------------------------------------===//
+// checked_rem_trunc
+//===----------------------------------------------------------------------===//
+
+template<std::integral Int, std::same_as<Int> Rhs>
+constexpr auto checked_rem_trunc(Int lhs, Rhs rhs) -> arith_result<Int>
+{
+    constexpr Int zero{};
+
+    if (rhs == zero) return std::nullopt;
+    return lhs % rhs;
+}
+
+//===----------------------------------------------------------------------===//
+// saturate
+//===----------------------------------------------------------------------===//
+
+template<std::integral Int>
+constexpr auto saturate(arith_result<Int> result) -> std::optional<Int>
+{
+    constexpr auto min = std::numeric_limits<Int>::min();
+    constexpr auto max = std::numeric_limits<Int>::max();
+
+    switch (result.quality()) {
+    case arith_quality::undefined: return std::nullopt;
+    case arith_quality::rounded:
+    case arith_quality::exact:     return result.value();
+    case arith_quality::underflow: return min;
+    case arith_quality::overflow:  return max;
+    }
 }
 
 } // namespace messner

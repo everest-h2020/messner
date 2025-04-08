@@ -1,16 +1,16 @@
-/// Implements the Ref dialect base.
+/// Implementation of the Ref dialect.
 ///
 /// @file
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
 
-#include "messner/Dialect/Ref/IR/Base.h"
+#include "messner/Dialect/Ref/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::ref;
 
 //===- Generated implementation -------------------------------------------===//
 
-#include "messner/Dialect/Ref/IR/Base.cpp.inc"
+#include "messner/Dialect/Ref/IR/Dialect.cpp.inc"
 
 //===----------------------------------------------------------------------===//
 
@@ -20,6 +20,7 @@ using namespace mlir::ref;
 
 void RefDialect::initialize()
 {
-    registerOps();
     registerTypes();
+    registerAttributes();
+    registerOps();
 }

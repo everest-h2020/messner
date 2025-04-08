@@ -72,15 +72,13 @@ find_library(MPFR_LIBRARY
         mpfr
     HINTS
         "${GMP_ROOT}/lib/"
-    DOC "Path to the MPFR library."
-)
+    DOC "Path to the MPFR library.")
 find_path(MPFR_INCLUDE_DIR
     NAMES
         mpfr.h
     HINTS
         "${GMP_ROOT}/include/"
-    DOC "Path to the MPFR include directory."
-)
+    DOC "Path to the MPFR include directory.")
 
 if(MPFR_USE_STATIC_LIBS)
     # Undo our static-only find hack.
@@ -90,8 +88,7 @@ endif()
 mark_as_advanced(
     MPFR_ROOT
     MPFR_LIBRARY
-    MPFR_INCLUDE_DIR
-)
+    MPFR_INCLUDE_DIR)
 
 ### Step 2: Examine what we found. ###
 
@@ -109,8 +106,7 @@ find_package_handle_standard_args(MPFR
         MPFR_INCLUDE_DIR
         MPFR_LIBRARY
     VERSION_VAR
-        MPFR_VERSION
-)
+        MPFR_VERSION)
 if(NOT MPFR_FOUND)
     # Optional dependency not fulfilled.
     return()

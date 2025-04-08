@@ -66,15 +66,13 @@ find_library(GMP_LIBRARY
         gmp
     HINTS
         "${GMP_ROOT}/lib/"
-    DOC "Path to the GMP library."
-)
+    DOC "Path to the GMP library.")
 find_path(GMP_INCLUDE_DIR
     NAMES
         gmp.h
     HINTS
         "${GMP_ROOT}/include/"
-    DOC "Path to the GMP include directory."
-)
+    DOC "Path to the GMP include directory.")
 
 if(GMP_USE_STATIC_LIBS)
     # Undo our static-only find hack.
@@ -84,8 +82,7 @@ endif()
 mark_as_advanced(
     GMP_ROOT
     GMP_LIBRARY
-    GMP_INCLUDE_DIR
-)
+    GMP_INCLUDE_DIR)
 
 ### Step 2: Examine what we found. ###
 
@@ -103,8 +100,7 @@ find_package_handle_standard_args(GMP
         GMP_INCLUDE_DIR
         GMP_LIBRARY
     VERSION_VAR
-        GMP_VERSION
-)
+        GMP_VERSION)
 if(NOT GMP_FOUND)
     # Optional dependency not fulfilled.
     return()

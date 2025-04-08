@@ -104,7 +104,7 @@ public:
     constexpr ~arith_result_storage() = default;
 
 protected:
-    /*implicit*/ constexpr arith_result_storage() = default;
+    /*implicit*/ constexpr arith_result_storage() : _undefined{} {}
 
     explicit constexpr arith_result_storage(
         arith_quality quality,
@@ -197,6 +197,11 @@ public:
     [[nodiscard]]
     constexpr auto value_or(U &&default_value) && -> T;
 
+    /// Obtains the contained value if it is exact, or std::nullopt.
+    constexpr auto exact() const & -> std::optional<T>;
+    /// @copydoc exact()
+    constexpr auto exact() && -> std::optional<T>;
+
     /// Overwrites this result via in-place construction.
     ///
     /// If @p quality is arith_result::undefined, no value will be constructed.
@@ -233,7 +238,8 @@ public:
     constexpr auto operator<=>(const T &rhs) const -> std::partial_ordering;
 
     /// Swaps the qualities and results of two arith_result instances.
-    friend constexpr void swap(arith_result &lhs, arith_result &rhs);
+    template<class U>
+    friend constexpr void swap(arith_result<U> &lhs, arith_result<U> &rhs);
     /// Computes a hash value for an arith_result.
     friend struct ::std::hash<arith_result>;
 };
@@ -419,6 +425,20 @@ constexpr auto arith_result<T>::value_or(U &&default_value) && -> T
 {
     return this->has_value() ? std::move(this->_defined)
                              : static_cast<T>(std::forward<U>(default_value));
+}
+
+template<class T>
+constexpr auto arith_result<T>::exact() const & -> std::optional<T>
+{
+    if (*this != arith_quality::exact) return std::nullopt;
+    return std::optional<T>(std::in_place, this->value());
+}
+
+template<class T>
+constexpr auto arith_result<T>::exact() && -> std::optional<T>
+{
+    if (*this != arith_quality::exact) return std::nullopt;
+    return std::optional<T>(std::in_place, std::move(*this).value());
 }
 
 template<class T>

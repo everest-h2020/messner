@@ -1,5 +1,6 @@
 add_mlir_dialect_library(RefDialect
-        Base.cpp
+        Attributes.cpp
+        Dialect.cpp
         Ops.cpp
         Types.cpp
 
@@ -12,4 +13,4 @@ add_mlir_dialect_library(RefDialect
         MLIRSideEffectInterfaces
         MLIRInferTypeOpInterface
         RefEnums
-)
+        RefInterfaces)

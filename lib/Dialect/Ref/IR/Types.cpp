@@ -1,4 +1,4 @@
-/// Implements the Ref dialect types.
+/// Implementation of the Ref dialect types.
 ///
 /// @file
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
@@ -6,7 +6,6 @@
 #include "messner/Dialect/Ref/IR/Types.h"
 
 #include <llvm/ADT/TypeSwitch.h>
-#include <llvm/Support/Casting.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/DialectImplementation.h>
 #include <mlir/IR/OpImplementation.h>
@@ -25,7 +24,7 @@ using namespace mlir::ref;
 // RefDialect implementation
 //===----------------------------------------------------------------------===//
 
-Type RefDialect::parseType(DialectAsmParser &parser) const
+auto RefDialect::parseType(DialectAsmParser &parser) const -> Type
 {
     if (std::string kindStr; !parser.parseOptionalString(&kindStr)) {
         const auto maybeKind = symbolizeReferenceKind(kindStr);

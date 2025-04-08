@@ -5,7 +5,8 @@
 
 #pragma once
 
-#include "messner/Dialect/Ref/IR/Base.h"
+#include "messner/Dialect/EKL/IR/Dialect.h"
+#include "messner/Dialect/Ref/IR/Dialect.h"
 
 #include <mlir/IR/MLIRContext.h>
 
@@ -14,6 +15,7 @@ namespace messner {
 /// Registers all dialects added by messner at @p registry .
 inline void registerAllDialects(mlir::DialectRegistry &registry)
 {
+    registry.insert<mlir::ekl::EKLDialect>();
     registry.insert<mlir::ref::RefDialect>();
 }
 

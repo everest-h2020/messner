@@ -1,11 +1,11 @@
-/// Declaration of the Ref dialect base.
+/// Declaration of the Ref dialect.
 ///
 /// @file
 /// @author     Karl F. A. Friebel (karl.friebel@tu-dresden.de)
 
 #pragma once
 
-#include "messner/Dialect/Ref/Enums.h"
+#include "messner/Dialect/Ref/Enums.h" // IWYU pragma: export
 
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinTypes.h>
@@ -13,6 +13,6 @@
 
 //===- Generated includes -------------------------------------------------===//
 
-#include "messner/Dialect/Ref/IR/Base.h.inc"
+#include "messner/Dialect/Ref/IR/Dialect.h.inc"
 
 //===----------------------------------------------------------------------===//

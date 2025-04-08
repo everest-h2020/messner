@@ -72,8 +72,7 @@ find_program(REflex_EXECUTABLE
         "${REflex_ROOT}/bin/"
     PATHS
         "/usr/local/bin/"
-    DOC "Path to the reflex executable."
-)
+    DOC "Path to the reflex executable.")
 find_path(REflex_INCLUDE_DIR
     NAMES
         reflex/flexlexer.h
@@ -83,8 +82,7 @@ find_path(REflex_INCLUDE_DIR
         "/usr/local/include/"
     PATH_SUFFIXES
         reflex
-    DOC "Path to the reflex include directory."
-)
+    DOC "Path to the reflex include directory.")
 find_library(REflex_LIBRARY
     NAMES
         reflex
@@ -92,15 +90,13 @@ find_library(REflex_LIBRARY
         "${REflex_ROOT}/lib/"
     PATHS
         "/usr/local/lib/"
-    DOC "Path to the reflex library."
-)
+    DOC "Path to the reflex library.")
 
 mark_as_advanced(
     REflex_ROOT
     REflex_EXECUTABLE
     REflex_INCLUDE_DIR
-    REflex_LIBRARY
-)
+    REflex_LIBRARY)
 
 if(REflex_USE_STATIC_LIBS)
     # Undo our static-only find hack.
@@ -135,8 +131,7 @@ find_package_handle_standard_args(REflex
         REflex_INCLUDE_DIR
         REflex_LIBRARY
     VERSION_VAR
-        REflex_VERSION
-)
+        REflex_VERSION)
 if(NOT REflex_FOUND)
     # Optional dependency not fulfilled.
     return()

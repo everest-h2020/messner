@@ -8,4 +8,5 @@ add_mlir_library(RefEnums
     LINK_LIBS
         MLIRIR)
 
+add_subdirectory(Interfaces)
 add_subdirectory(IR)

@@ -7,13 +7,14 @@
 #ifndef REF_TYPES
 #define REF_TYPES
 
-include "messner/Dialect/Ref/IR/Base.td"
+include "messner/Dialect/Ref/IR/Dialect.td"
+include "messner/Dialect/Ref/Interfaces/ReferenceTypeInterface.td"
 
 //===----------------------------------------------------------------------===//
 // Type families
 //===----------------------------------------------------------------------===//
 
-def Ref_ReferenceType : Ref_Type<"Reference"> {
+def Ref_ReferenceType : Ref_Type<"Reference", [Ref_ReferenceTypeInterface]> {
     let mnemonic = "type";
     let summary = "Type of a reference to a cell";
     let description = [{
@@ -37,57 +38,16 @@ def Ref_ReferenceType : Ref_Type<"Reference"> {
     }];
 
     let extraClassDeclaration = [{
-        /// Determines whether the reference is readable.
-        [[nodiscard]] bool isReadable() const;
-        /// Determines whether the reference is writable.
-        [[nodiscard]] bool isWritable() const;
-
         /// Obtains a copy of this reference type with @p cellType .
         ///
         /// @param              cellType Replacement cell type.
         ///
         /// @pre    `cellType`
-        [[nodiscard]] ReferenceType cloneWith(Type cellType) const;
+        auto cloneWith(Type cellType) const -> ReferenceType;
         /// Obtains a copy of this reference type with @p kind .
         ///
         /// @param              kind    Replacement ReferenceKind.
-        [[nodiscard]] ReferenceType cloneWith(ReferenceKind kind) const;
-    }];
-}
-
-//===----------------------------------------------------------------------===//
-// Named constraints
-//===----------------------------------------------------------------------===//
-
-def Ref_ReadableRef : Type<
-        /*predicate=*/CPred<"::llvm::isa<::mlir::ref::ReadableRefType>($_self)">,
-        /*summary=*/"Any readable reference type",
-        /*cppClassName=*/"::mlir::ref::ReadableRefType"> {
-    let description = [{
-        Implements a type constraint on reference types requiring them to be
-        readable.
-
-        Examples:
-
-        ```
-        !ref<r, i32>
-        ```
-    }];
-}
-
-def Ref_WritableRef : Type<
-        /*predicate=*/CPred<"::llvm::isa<::mlir::ref::WritableRefType>($_self)">,
-        /*summary=*/"Any writable reference type",
-        /*cppClassName=*/"::mlir::ref::WritableRefType"> {
-    let description = [{
-        Implements a type constraint on reference types requiring them to be
-        writable.
-
-        Examples:
-
-        ```
-        !ref<w, i32>
-        ```
+        auto cloneWith(ReferenceKind kind) const -> ReferenceType;
     }];
 }
 

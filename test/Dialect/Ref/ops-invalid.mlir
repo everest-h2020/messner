@@ -1,7 +1,7 @@
 // RUN: messner-opt %s -split-input-file -verify-diagnostics
 
 func.func @read_not_readable(%arg0: !ref<w, i32>) {
-    // expected-error@+1 {{invalid kind of Type}}
+    // expected-error@+1 {{invalid kind of type}}
     %0 = ref.read %arg0 : !ref<w, i32>
     return
 }
@@ -18,7 +18,7 @@ func.func @read_mismatched_value(%arg0: !ref<r, i32>) {
 // -----
 
 func.func @write_not_writable(%arg0: i32, %arg1: !ref<r, i32>) {
-    // expected-error@+1 {{invalid kind of Type}}
+    // expected-error@+1 {{invalid kind of type}}
     ref.write %arg0 to %arg1 : !ref<r, i32>
     return
 }

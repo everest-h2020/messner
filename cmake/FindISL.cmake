@@ -77,16 +77,15 @@ find_library(ISL_LIBRARY
         # In case of install dir:
         "${ISL_ROOT}/lib/"
         "${PC_ISL_LIBDIR}"
-    DOC "Path to the isl library."
-)
+    DOC "Path to the isl library.")
+
 find_path(ISL_INCLUDE_DIR
     NAMES
         isl/union_map.h
     HINTS
         "${ISL_ROOT}/include/"
         "${PC_ISL_INCLUDEDIR}"
-    DOC "Path to the isl include directory."
-)
+    DOC "Path to the isl include directory.")
 
 if(ISL_USE_STATIC_LIBS)
     # Undo our static-only find hack.
@@ -96,8 +95,7 @@ endif()
 mark_as_advanced(
     ISL_ROOT
     ISL_LIBRARY
-    ISL_INCLUDE_DIR
-)
+    ISL_INCLUDE_DIR)
 
 ### Step 2: Examine what we found. ###
 
@@ -157,8 +155,8 @@ find_package_handle_standard_args(ISL
         ISL_INCLUDE_DIR
         ISL_LIBRARY
     VERSION_VAR
-        ISL_VERSION
-)
+        ISL_VERSION)
+
 if(NOT ISL_FOUND)
     # Optional dependency not fulfilled.
     return()
