@@ -208,13 +208,13 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
         passManager.addPass(messner::createConvertEKLToStandardPass());
         // -reconcile-unrealized-casts -cse -canonicalize
         passManager.addPass(createReconcileUnrealizedCastsPass());
-        passManager.addPass(createCSEPass());
+        // passManager.addPass(createCSEPass());
         passManager.addPass(createCanonicalizerPass());
         // -ekl-to-std -reconcile-unrealized-casts
         passManager.addPass(messner::createConvertEKLToStandardPass());
         passManager.addPass(createReconcileUnrealizedCastsPass());
         // -cse -canonicalize
-        passManager.addPass(createCSEPass());
+        // passManager.addPass(createCSEPass());
         passManager.addPass(createCanonicalizerPass());
     }
 
@@ -226,7 +226,7 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
         // Magic copy elision fix.
         passManager.addPass(std::make_unique<CopyElisionPass>());
         // -cse -canonicalize
-        passManager.addPass(createCSEPass());
+        // passManager.addPass(createCSEPass());
         passManager.addPass(createCanonicalizerPass());
     }
 
@@ -241,6 +241,8 @@ OwningOpRef<ModuleOp> runOnInput(OwningOpRef<ProgramOp> input)
             passManager.addPass(createConvertLinalgToLoopsPass());
         }
 
+        // -cse
+        passManager.addPass(createCSEPass());
         // -buffer-loop-hoisting -buffer-hoosting -promote-buffers-to-stack
         // -buffer-deallocation
         passManager.addPass(bufferization::createBufferLoopHoistingPass());
